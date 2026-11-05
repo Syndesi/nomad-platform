@@ -46,11 +46,14 @@ table inet {{ cluster_firewall_table }} {
   # Published job ports (docker/nomad nat): the traffic is dnat'ed and goes through forward, never through input. It is accepted from the
   # cluster and from the container bridges; from anywhere else only the public ports (matched on the original destination port, so a
   # `to` mapping does not matter) pass. Everything else that is dnat'ed is dropped, so a job that publishes a port is not open to the world.
+  # Packets routed directly to a container's ip (not dnat'ed) are dropped too, except from the cluster and the bridges.
   chain forward {
     type filter hook forward priority filter; policy accept;
 
     iifname { "docker0", "nomad", "br-*" } accept
     ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } accept
+    # new connections to a container that are not dnat'ed, i.e. routed straight to its ip (nomad's bridge has no protection of its own)
+    oifname { "docker0", "nomad", "br-*" } ct state new ct status != dnat drop
 {% if cluster_firewall_public_tcp_ports %}
     ct status dnat ct original proto-dst { {{ cluster_firewall_public_tcp_ports | join(', ') }} } accept
 {% endif %}

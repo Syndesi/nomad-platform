@@ -17,7 +17,7 @@ server:
           # the session cookie only: a header login (Basic) can never be more than one factor, and every rule is two_factor
           - name: CookieSession
 # Second factor: TOTP. The shared secret of each user comes from the sops-encrypted authelia_totp_seeds and is registered by the deploy
-# (`authelia storage user totp generate --secret`, role authelia_totp), so nobody has to go through the identity verification of the portal.
+# (`authelia storage user totp import`, role authelia_totp), so nobody has to go through the identity verification of the portal.
 # WebAuthn is off unless authelia_webauthn is true (registering a key needs the one-time code of the notifier, see README).
 totp:
   disable: false
