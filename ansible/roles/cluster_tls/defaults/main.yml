@@ -10,6 +10,7 @@ cluster_tls_node_dns_sans: >-
         if inventory_hostname in groups['cluster_servers'] | default([]) else [])
      + ((['client.' ~ cluster_region ~ '.nomad'])
         if inventory_hostname in groups['cluster_clients'] | default([]) else [])
+     + cluster_host_names
      + cluster_pki_extra_sans }}
 
 # subjectAltName value of the node cert: names + 127.0.0.1 (the tofu tunnel and local clients connect there) + the cluster address

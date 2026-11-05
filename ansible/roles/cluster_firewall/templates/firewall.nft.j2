@@ -18,11 +18,13 @@ table inet {{ cluster_firewall_table }} {
     udp sport 67 udp dport 68 accept
     udp sport 547 udp dport 546 accept
 
-    # ssh from anywhere
+    # ssh from anywhere, except from the container bridges (a compromised workload gets no path to sshd)
+    iifname { "docker0", "nomad", "br-*" } tcp dport 22 drop
     tcp dport 22 accept
 
-    # containers on the host's bridges (dns of docker0, consul connect, ...)
-    iifname { "docker0", "nomad", "br-*" } accept
+    # containers on the host's bridges: only dns and what cluster_firewall_bridge_*_ports lists, not the whole host
+    iifname { "docker0", "nomad", "br-*" } tcp dport { {{ cluster_firewall_bridge_tcp_ports | join(', ') }} } accept
+    iifname { "docker0", "nomad", "br-*" } udp dport { {{ cluster_firewall_bridge_udp_ports | join(', ') }} } accept
 
     # the cluster itself
     ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } tcp dport { {{ cluster_firewall_tcp_ports | join(', ') }} } accept
@@ -40,12 +42,18 @@ table inet {{ cluster_firewall_table }} {
 
     counter drop
   }
-{% if cluster_firewall_cluster_only_ports %}
 
-  # published job ports for the cluster only (nat'ed traffic goes through forward, not input)
+  # Published job ports (docker/nomad nat): the traffic is dnat'ed and goes through forward, never through input. It is accepted from the
+  # cluster and from the container bridges; from anywhere else only the public ports (matched on the original destination port, so a
+  # `to` mapping does not matter) pass. Everything else that is dnat'ed is dropped, so a job that publishes a port is not open to the world.
   chain forward {
     type filter hook forward priority filter; policy accept;
-    iifname != { "docker0", "nomad", "br-*" } ip saddr != { {{ cluster_firewall_cluster_sources | join(', ') }} } tcp dport { {{ cluster_firewall_cluster_only_ports | join(', ') }} } ct status dnat counter drop
-  }
+
+    iifname { "docker0", "nomad", "br-*" } accept
+    ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } accept
+{% if cluster_firewall_public_tcp_ports %}
+    ct status dnat ct original proto-dst { {{ cluster_firewall_public_tcp_ports | join(', ') }} } accept
 {% endif %}
+    ct status dnat counter drop
+  }
 }

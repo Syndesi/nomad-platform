@@ -9,6 +9,9 @@ bind_addr = "{{ consul_ip }}"
 advertise_addr = "{{ consul_ip }}"
 # apis only on the node itself; the outside world goes through traefik + authelia
 client_addr = "{{ consul_client_addr }}"
+addresses {
+  https = "{{ consul_https_addr }}"
+}
 
 encrypt = "{{ cluster_consul_gossip_key }}"
 # every node lists the servers, so any new node can join with just this file

@@ -3,6 +3,8 @@
 # the cluster's authelia.yml + secrets), so no secret is part of this spec.
 # The sqlite database (totp secrets, devices, bans) is on the host volume "authelia" (/srv/authelia on the node, made by the nomad role),
 # so the job is bound to the nodes that have it (client meta authelia = true: the servers by default) and survives redeployments.
+# The rendered config (session secret, storage key, password hashes) goes to secrets/ (not readable through `nomad alloc fs`), mode 0600.
+# Port 9091 is published on the node's cluster address; the firewall's forward chain drops it for everything outside the cluster.
 # Backed up by `task backup`. Never run it with auto_revert: a failed upgrade may already have migrated the database, and an older image
 # cannot read a newer schema.
 
@@ -68,6 +70,9 @@ job "authelia" {
         # $${...} stays literal in HCL; nomad fills in the real address when it registers the tags.
         "traefik.http.middlewares.authelia.forwardAuth.address=http://$${NOMAD_ADDR_http}/api/authz/forward-auth",
         "traefik.http.middlewares.authelia.forwardAuth.trustForwardHeader=true",
+        # only what authelia needs: the session cookie, the forwarding headers and Accept / X-Requested-With (without them authelia answers 401 instead of a redirect). By default traefik copies ALL request headers, i.e. also
+        # X-Nomad-Token / X-Consul-Token of the cli proxy, to authelia (plain http, possibly another node).
+        "traefik.http.middlewares.authelia.forwardAuth.authRequestHeaders=Cookie,Accept,X-Requested-With,X-Forwarded-For,X-Forwarded-Proto,X-Forwarded-Host,X-Forwarded-Uri,X-Forwarded-Method",
         "traefik.http.middlewares.authelia.forwardAuth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email",
         ], var.tls_resolver != "" ? [
         "traefik.http.routers.authelia.tls.certresolver=${var.tls_resolver}",
@@ -95,20 +100,22 @@ job "authelia" {
         data        = <<EOT
 {{ with nomadVar "nomad/jobs/authelia" }}{{ .configuration }}{{ end }}
 EOT
-        destination = "local/config/configuration.yml"
+        destination = "secrets/config/configuration.yml"
+        perms       = "0600"
       }
 
       template {
         data        = <<EOT
 {{ with nomadVar "nomad/jobs/authelia" }}{{ .users }}{{ end }}
 EOT
-        destination = "local/config/users.yml"
+        destination = "secrets/config/users.yml"
+        perms       = "0600"
       }
 
       config {
         image   = var.image
         ports   = ["http"]
-        volumes = ["local/config:/config"]
+        volumes = ["secrets/config:/config"]
       }
 
       resources {

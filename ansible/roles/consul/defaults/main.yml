@@ -4,8 +4,11 @@ consul_config_dir: /etc/consul.d
 consul_data_dir: /var/lib/consul
 consul_is_server: "{{ inventory_hostname in groups['cluster_servers'] | default([]) }}"
 consul_ip: "{{ cluster_ip }}"
-# the local http(s) api: loopback, plus the cluster address on the ingress node when traefik runs in its own network namespace
-consul_client_addr: "127.0.0.1{{ (' ' ~ cluster_ip) if (cluster_traefik_wireguard and inventory_hostname in groups['cluster_ingress'] | default([])) else '' }}"
+# dns, grpc: loopback only
+consul_client_addr: "127.0.0.1"
+# the https api: loopback plus the cluster address, for workloads in bridge networks (traefik behind wireguard, your jobs). The firewall
+# opens the port to the container bridges only (cluster_firewall_bridge_tcp_ports), other nodes cannot reach it.
+consul_https_addr: "127.0.0.1 {{ cluster_ip }}"
 
 # Token the agent itself uses (node identity, minted by tofu-consul, read from the encrypted state).
 # Empty until tofu-consul ran; the servers then run the `config` tasks again.

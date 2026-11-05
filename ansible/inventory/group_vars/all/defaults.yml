@@ -104,6 +104,11 @@ cluster_subnets: >-
   {{ [ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')]['ipv4']['network']
       ~ '/' ~ ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')]['ipv4']['prefix']] }}
 
+# Names that mean "this node" for jobs: every node resolves them to its own cluster address (an /etc/hosts block, served to the host and
+# to containers by the node's resolver), so a job that must reach the local Nomad / Consul api (https, ports 4646 / 8501) does not need
+# to know where it runs. Not localhost: inside a container that is the container. They are also names in the node's tls certificate.
+cluster_host_names: [host.internal, nomad.host.internal, consul.host.internal]
+
 # --- firewall -------------------------------------------------------------------------------------
 # nftables on every node (role cluster_firewall): input policy drop; ssh and (ingress nodes) 80/443 from anywhere, the nomad and
 # consul ports only from the cluster's subnet. false removes it again. Details and extra rules: roles/cluster_firewall/defaults.

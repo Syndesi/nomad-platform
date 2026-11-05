@@ -5,8 +5,9 @@
 #   - ssh (22) from anywhere (no source restriction: a wrong list would lock you out)
 #   - the nomad and consul ports (rpc, serf, http) only from cluster_firewall_cluster_sources
 #   - traefik's 80 and 443 on the ingress nodes, from anywhere
-#   - everything that comes from the container bridges (docker0, nomad, br-*): dns, consul connect, traefik behind wireguard
-# Jobs publish no ports of their own here (forgejo's ssh goes through traefik too), so the forward chain is not touched.
+#   - from the container bridges (docker0, nomad, br-*) only dns, the nomad and consul api and cluster_firewall_bridge_*_ports; traffic the bridges send to published (nat'ed) ports passes the forward chain
+# Published (nat'ed) job ports pass the forward chain, not input: from outside the cluster and the bridges only the public ports get through,
+# any other dnat'ed traffic is dropped (authelia's 9091, the metrics port, ports of your own jobs).
 cluster_firewall_file: /etc/cluster/firewall.nft
 cluster_firewall_table: cluster
 
@@ -17,7 +18,14 @@ cluster_firewall_extra_rules: ""
 
 cluster_firewall_tcp_ports: "{{ [cluster_nomad_http_port, 4647, 4648, 8300, 8301] + cluster_firewall_cluster_only_ports }}"
 # ports of jobs that are published on the host (host network, or bridge network through nat) but only for the cluster; the nat case does not
-# pass the input chain, it is dropped in a forward chain for everything that does not come from the cluster or the container bridges
+# pass the input chain; the forward chain drops all of it for everything that does not come from the cluster or the container bridges
 cluster_firewall_cluster_only_ports: "{{ [cluster_traefik_metrics_port] if (cluster_traefik_metrics | bool and inventory_hostname in groups['cluster_ingress'] | default([])) else [] }}"
 cluster_firewall_udp_ports: [4648, 8301]
 cluster_firewall_public_tcp_ports: "{{ [80, 443] if inventory_hostname in groups['cluster_ingress'] | default([]) else [] }}"
+
+# What containers may reach on the host itself (input chain): dns of the local resolver, and the Nomad and Consul apis on the node's cluster
+# address (jobs and traefik behind wireguard talk to them; both still need tokens and tls). Consul connect needs nothing here (nomad gives
+# the sidecar a unix socket to the agent, mesh traffic is nat'ed and passes the forward chain). Ports of your own host services that jobs
+# need: add them here.
+cluster_firewall_bridge_tcp_ports: "{{ [53, cluster_nomad_http_port, cluster_consul_https_port] }}"
+cluster_firewall_bridge_udp_ports: [53]

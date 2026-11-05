@@ -118,6 +118,19 @@
         enabled: true
         state: "{{ 'restarted' if (cluster_dns_dnsmasq.changed or cluster_dns_conf_dir.changed) else 'started' }}"
 
+# the resolvers of both families serve /etc/hosts to the host and to containers (docker0): the same name is the local node everywhere
+- name: Names of this node (cluster_host_names) in /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} cluster_host_names"
+    block: "{{ cluster_ip }} {{ cluster_host_names | join(' ') }}"
+  register: cluster_dns_hosts
+
+- name: dnsmasq re-reads /etc/hosts
+  ansible.builtin.command: pkill -HUP dnsmasq
+  when: cluster_dns_hosts is changed and ansible_facts['os_family'] != 'Debian'
+  changed_when: true
+
 - name: Restart docker so containers get the new resolver
   ansible.builtin.service:
     name: docker

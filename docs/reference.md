@@ -20,6 +20,11 @@ VLAN, WireGuard `wg0`, ...) and its interface name.
 certificates carry the address as an IP SAN (and `<node>.<cluster_node_domain>` as a name). All nodes must reach each other on these
 addresses, so the interface of several nodes must be a real shared network. A changed address needs a redeploy (new certificates).
 
+**Talking to the local Nomad / Consul from a job.** `localhost` inside a container is the container, so every node resolves
+`host.internal`, `nomad.host.internal` and `consul.host.internal` (`cluster_host_names`) to its own cluster address, for the host and for
+containers on any bridge, mesh services included: `https://consul.host.internal:8501`, `https://nomad.host.internal:4646` (the node certificate
+carries these names; tokens and the cluster CA are the job's business). Jobs on the host network can use `localhost`.
+
 **DNS upstream.** Everything that is not `*.consul` goes to the node's default gateway (`cluster_dns_upstreams_override` replaces it).
 Providers whose gateway does not answer DNS need the override.
 
@@ -46,8 +51,10 @@ at most after the login (`authelia_session_*`).
 ## Host firewall
 
 Every node gets a nftables table `inet cluster` (`cluster_firewall_enabled`, default true), loaded at boot. Input policy drop except:
-loopback, established connections, icmp, dhcp replies, **ssh from anywhere** (no source list: a wrong one would lock you out), Nomad
-and Consul ports from the cluster subnet only, 80/443 on ingress nodes, and traffic from the container bridges. Own rules:
+loopback, established connections, icmp, dhcp replies, **ssh from anywhere but the container bridges** (no source list: a wrong one would lock you out), Nomad
+and Consul ports from the cluster subnet only, 80/443 on ingress nodes, and from the container bridges only dns and the Nomad and Consul api on the node's cluster address (jobs need them; tokens and tls
+still apply; `cluster_firewall_bridge_tcp_ports` / `_udp_ports`). A forward chain drops everything that docker/nomad publish (nat) for sources outside the cluster
+and the bridges, except the public ports (80/443 on ingress nodes): a port published by a job is cluster-only unless you open it. Own rules:
 `cluster_firewall_extra_rules` (raw nft). Rules are checked with `nft -c` first. `task smoke` checks the table.
 
 ## Access: ssh
