@@ -1,0 +1,359 @@
+version: "3"
+
+# Included by the Taskfile of a cluster repo (flatten: true), so `task deploy:ansible` etc. work from there.
+# Tasks run in the cluster repo's directory; this file lives in <cluster>/base/tasks/.
+# Needs from the cluster .env: CLUSTER_NAME, NOMAD_VERSION, CONSUL_VERSION, COMPOSE_FILE (see docs/contract.md).
+
+env:
+  CLUSTER_DIR:
+    sh: pwd
+  HOST_UID:
+    sh: id -u
+  HOST_GID:
+    sh: id -g
+  TIMING_LOG: .deploy-timing.log
+
+vars:
+  # Everything runs inside the long-lived container of the cluster, started by `task up`.
+  EXEC: docker compose exec -T tools
+  EXEC_ANSIBLE: docker compose exec -T -w /work/base/ansible tools
+
+tasks:
+  default:
+    cmds: [task --list]
+    silent: true
+
+  # ---- binaries (host side, needs docker) --------------------------------------------------
+
+  build:
+    desc: Build nomad + consul from source for alpine and ubuntu into the shared artifacts cache (~/.cache/nomad-platform/artifacts or $ARTIFACTS_DIR; skips existing, FORCE=1 rebuilds)
+    aliases: [build:binaries]
+    deps: [build:nomad:alpine, build:nomad:ubuntu, build:consul:alpine, build:consul:ubuntu]
+
+  build:nomad:alpine:
+    internal: true
+    cmds: ["base/binaries/build.sh nomad alpine"]
+  build:nomad:ubuntu:
+    internal: true
+    cmds: ["base/binaries/build.sh nomad ubuntu"]
+  build:consul:alpine:
+    internal: true
+    cmds: ["base/binaries/build.sh consul alpine"]
+  build:consul:ubuntu:
+    internal: true
+    cmds: ["base/binaries/build.sh consul ubuntu"]
+
+  artifacts:
+    desc: List the built binaries
+    cmds:
+      - ls -lh "${ARTIFACTS_DIR:-$HOME/.cache/nomad-platform/artifacts}"
+    silent: true
+
+  clean:cache:
+    desc: Drop the docker build cache (go module/build caches; several GB) - the next build starts cold
+    prompt: Prune the whole docker builder cache?
+    cmds:
+      - docker builder prune -f
+
+  # ---- tools container ----------------------------------------------------------------------
+
+  up:
+    desc: Build the (shared) tool image and start this cluster's tool container (stays up until `task down`)
+    cmds:
+      # docker would create a missing bind-mount source as root: make the shared binary cache as the user first
+      - mkdir -p "${ARTIFACTS_DIR:-$HOME/.cache/nomad-platform/artifacts}"
+      - docker compose up -d --build --remove-orphans
+
+  down:
+    desc: Stop and remove the tool container (does not touch the nodes)
+    cmds:
+      - docker compose down
+
+  shell:
+    desc: Interactive shell in the tool container
+    deps: [up]
+    interactive: true
+    cmds:
+      - docker compose exec tools bash
+
+  lint:
+    desc: ansible-lint, yamllint, shellcheck, tofu fmt + validate of the BASE code, nomad fmt, playbook syntax
+    aliases: [validate]
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/lint.sh"
+
+  # ---- deploy -------------------------------------------------------------------------------
+
+  deploy:ansible:
+    desc: Run the cluster playbook (base site.yml, then the cluster's own playbooks/*.yml); extra args go to ansible-playbook
+    deps: [up, check]
+    cmds:
+      - "base/scripts/timed.sh ansible:site {{.EXEC}} ansible-playbook /work/base/ansible/playbooks/site.yml {{.CLI_ARGS}}"
+      - task: deploy:extra
+
+  deploy:extra:
+    desc: Run the cluster repo's own playbooks (playbooks/*.yml, in name order), if there are any
+    internal: true
+    cmds:
+      - |
+        for f in playbooks/*.yml; do
+          [ -e "$f" ] || exit 0
+          base/scripts/timed.sh "ansible:$(basename "$f" .yml)" {{.EXEC}} ansible-playbook "/work/$f" {{.CLI_ARGS}}
+        done
+
+  node:
+    desc: "Configure ONE node (new, or reinstalled): task node -- <inventory hostname>"
+    deps: [up, check]
+    cmds:
+      - base/scripts/node.sh {{.CLI_ARGS}}
+
+  check:
+    desc: Verify the one-time prerequisites exist (age key, CA, pre-generated secrets)
+    internal: true
+    silent: true
+    cmds:
+      - |
+        test -f .sops.yaml || { echo "no age identity yet: run 'task age:init' (once)"; exit 1; }
+        test -f pki/ca.pem || { echo "no CA yet: run 'task pki:ca' (once)"; exit 1; }
+        test -f inventory/group_vars/all/secrets.sops.yml || { echo "no secrets yet: run 'task secrets:init' (once)"; exit 1; }
+
+  # ---- one-time setup -----------------------------------------------------------------------
+
+  age:init:
+    desc: ONCE - create the age identity (secrets/age/keys.txt, or $AGE_KEY_DIR) and write its public key to .sops.yaml
+    deps: [up]
+    cmds:
+      - base/scripts/age-init.sh
+
+  ssh:init:
+    desc: "ONCE - create the ssh key ansible logs in to the nodes with (secrets/ssh/, or $SSH_KEY_DIR) and print its public half; with your own key: task ssh:init -- <private key file> (no passphrase, allowed algorithm)"
+    deps: [up]
+    cmds:
+      - base/scripts/ssh-init.sh {{.CLI_ARGS}}
+
+  ssh:bootstrap-cmd:
+    desc: Print the command to run ONCE on every new node, as root (creates the ansible user, installs sshd/python/sudo|doas)
+    cmds:
+      - |
+        user=$(docker compose exec -T tools bash -c '. "$CLUSTER_DIR/base/scripts/lib.sh"; cvar cluster_ansible_user')
+        echo "# copy base/scripts/node-bootstrap.sh to the node, then, as root:"
+        echo "sh node-bootstrap.sh $user '$(cat "${SSH_KEY_DIR:-./secrets/ssh}/ansible_ed25519.pub")'"
+    silent: true
+
+  ssh:forget:
+    desc: "Forget the ssh host key of a node (after a reinstall), e.g. task ssh:forget -- node1"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/ssh-forget.sh {{.CLI_ARGS}}"
+
+  pki:ca:
+    desc: Create the cluster CA ONCE - certificate in pki/, private key sops-encrypted (refuses to overwrite)
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/pki.sh ca"
+
+  pki:info:
+    desc: "Show the CA validity (the leaf certs live on the nodes only, see pki:nodes)"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/pki.sh info"
+
+  pki:nodes:
+    desc: Show the validity of the CA and of every certificate on the nodes
+    deps: [up]
+    cmds:
+      - "{{.EXEC_ANSIBLE}} ansible-playbook playbooks/pki-info.yml"
+
+  secrets:init:
+    desc: ONCE - generate gossip keys, management tokens, state passphrase and authelia secrets into the sops-encrypted secrets.sops.yml
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/secrets.sh init"
+
+  secrets:clean:
+    desc: "DESTRUCTIVE - delete age key, CA, all sops-encrypted secrets and the tofu cluster states (-> next deploy starts truly fresh). Does not touch the nodes"
+    prompt: This deletes the age private key, the CA and every generated secret. Encrypted files become unreadable for good. Continue?
+    cmds:
+      - task: secrets-clean-force
+
+  secrets-clean-force:
+    internal: true
+    cmds:
+      - |
+        rm -rf .sops.yaml pki/ca.pem inventory/group_vars/all/*.sops.yml state/tofu-consul state/tofu-nomad
+        docker compose exec -T tools rm -rf /dev/shm/cluster 2>/dev/null || true
+        rm -f "${AGE_KEY_DIR:-./secrets/age}/keys.txt"
+        echo "secrets removed; start again with: task age:init pki:ca secrets:init"
+
+  secrets:show:
+    desc: Print the decrypted secrets
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/secrets.sh show"
+
+  secrets:uuid:
+    desc: Print a fresh UUID (usable as consul / nomad token secret)
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/secrets.sh uuid"
+
+  secrets:key:
+    desc: Print a fresh 32 byte base64 gossip key
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/secrets.sh key"
+
+  authelia:user:
+    desc: "Set the password of an authelia user (asks for it, stores only the argon2id hash, sops-encrypted), e.g. task authelia:user -- alice"
+    deps: [up]
+    interactive: true
+    cmds:
+      - "base/scripts/authelia-user.sh {{.CLI_ARGS}}"
+
+  wireguard:conf:
+    desc: "Store the wg-quick config of traefik's wireguard client sops-encrypted (cluster_traefik_wireguard), e.g. task wireguard:conf -- ./wg0.conf"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/wireguard-conf.sh set < {{.CLI_ARGS}}"
+
+  become:password:
+    desc: "Make sudo / doas on the nodes ask for a password: asks for it twice, stores it sops-encrypted (task become:password -- remove goes back to passwordless; run task deploy:ansible afterwards)"
+    deps: [up]
+    interactive: true
+    cmds:
+      - "base/scripts/become-password.sh {{.CLI_ARGS}}"
+
+  authelia:seed:
+    desc: "Make the TOTP seed of an authelia user that has none yet (task authelia:user does it for new users), e.g. task authelia:seed -- alice"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/authelia-users.sh seed {{.CLI_ARGS}}"
+
+  authelia:users:
+    desc: List the authelia users that have a password hash
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/authelia-users.sh list"
+
+  tokens:
+    desc: List the ACL tokens that tofu minted (accessor ids only; the secrets stay in the encrypted states)
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/cluster.sh tokens"
+
+  tofu:enc:
+    desc: "tofu on an encrypted-state root, e.g. task tofu:enc -- tofu-consul output -json service_tokens"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/tofu-enc.sh {{.CLI_ARGS}}"
+
+  # ---- operations ---------------------------------------------------------------------------
+
+  maintenance:
+    desc: "Maintenance (run it regularly, e.g. from CI): backup first (task backup), then update packages, replace leaf certs (+ingress cert), report validity and the nodes that want a reboot (they are not rebooted unless cluster_reboot_allowed). Extra args go to ansible-playbook"
+    deps: [up, check]
+    cmds:
+      - task: backup
+      - "{{.EXEC_ANSIBLE}} ansible-playbook playbooks/maintenance.yml {{.CLI_ARGS}}"
+      - task: maintenance:extra
+
+  maintenance:extra:
+    desc: Run the cluster repo's own maintenance playbooks (maintenance/*.yml, in name order), if there are any
+    internal: true
+    cmds:
+      - |
+        for f in maintenance/*.yml; do
+          [ -e "$f" ] || exit 0
+          echo "== cluster maintenance playbook $f"
+          base/scripts/timed.sh "maintenance:$(basename "$f" .yml)" {{.EXEC}} ansible-playbook "/work/$f" {{.CLI_ARGS}}
+        done
+
+  backup:
+    desc: "Encrypted snapshots of nomad and consul (+ traefik's acme.json) into backups/ (age, git-ignored, newest BACKUP_KEEP=10 stay). No application data"
+    deps: [up, check]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/backup.sh"
+
+  restore:
+    desc: "Restore a backup into a cluster that was just built (task deploy:tofu first): task restore -- <name of a directory in backups/>. Restores the consul and nomad snapshots and the tofu states of that backup, then waits for task smoke"
+    deps: [up, check]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/restore.sh prepare {{.CLI_ARGS}}"
+      - "base/scripts/timed.sh ansible:restore {{.EXEC}} ansible-playbook /work/base/ansible/playbooks/site.yml -e cluster_restore_dir=/work/backups/$(basename '{{.CLI_ARGS}}')"
+      - |
+        for f in playbooks/*.yml; do
+          [ -e "$f" ] || exit 0
+          base/scripts/timed.sh "ansible:$(basename "$f" .yml)" {{.EXEC}} ansible-playbook "/work/$f"
+        done
+      - "{{.EXEC}} /work/base/scripts/restore.sh wait"
+
+  proxy:up:
+    desc: "Start the local proxy (caddy on 127.0.0.1) for nomad / consul command line tools; then task proxy:login. Needs docker on the host"
+    deps: [up]
+    cmds:
+      - base/scripts/proxy.sh up
+
+  proxy:login:
+    desc: "Log in for the local proxy: asks (gum) for user, password and the TOTP code, gives caddy the authelia session"
+    deps: [up]
+    interactive: true
+    cmds:
+      - base/scripts/proxy.sh login
+
+  proxy:status:
+    desc: Is the local proxy running and logged in
+    cmds:
+      - base/scripts/proxy.sh status
+
+  proxy:env:
+    desc: 'Environment for the cli tools: eval "$(task proxy:env -s)"'
+    silent: true
+    cmds:
+      - base/scripts/proxy.sh env
+
+  proxy:down:
+    desc: Stop the local proxy and forget the session
+    cmds:
+      - base/scripts/proxy.sh down
+
+  cluster:
+    desc: Show consul members, nomad servers/nodes and jobs (read-only tokens from the tofu outputs, run on the server node)
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/cluster.sh status"
+
+  smoke:
+    desc: "Does the deployed cluster work? members, jobs, ingress + login redirect, certificates, dns. 'task smoke -- connect' also runs a consul connect (envoy) test"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/smoke.sh {{.CLI_ARGS}}"
+
+  inventory:
+    desc: Show the merged ansible inventory as a graph with vars
+    deps: [up]
+    cmds:
+      - "{{.EXEC_ANSIBLE}} ansible-inventory --graph --vars"
+
+  version:
+    desc: Which version of the platform (base/) this cluster is pinned to
+    silent: true
+    cmds:
+      - base/scripts/upgrade.sh version
+
+  upgrade:
+    desc: "Move the pinned platform to a tag/commit (shows the changelog, stages the pointer): task upgrade -- v0.2.0"
+    cmds:
+      - base/scripts/upgrade.sh {{.CLI_ARGS}}
+
+  timing:
+    desc: Show how long each phase of the last timed run took
+    silent: true
+    cmds:
+      - base/scripts/timing.sh {{.TIMING_LOG}}
+
+  ansible:
+    desc: "Run any ansible command, e.g. task ansible -- all -m ping"
+    deps: [up]
+    cmds:
+      - "{{.EXEC_ANSIBLE}} ansible {{.CLI_ARGS}}"

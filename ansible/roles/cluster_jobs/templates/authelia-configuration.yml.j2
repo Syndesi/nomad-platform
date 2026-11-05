@@ -1,0 +1,87 @@
+# {{ ansible_managed }}
+theme: dark
+log:
+  level: info
+  format: json
+server:
+  address: 'tcp://:9091'
+  timeouts:
+    read: 6s
+    write: 6s
+    idle: 30s
+  endpoints:
+    authz:
+      forward-auth:
+        implementation: ForwardAuth
+        authn_strategies:
+          # the session cookie only: a header login (Basic) can never be more than one factor, and every rule is two_factor
+          - name: CookieSession
+# Second factor: TOTP. The shared secret of each user comes from the sops-encrypted authelia_totp_seeds and is registered by the deploy
+# (`authelia storage user totp generate --secret`, role authelia_totp), so nobody has to go through the identity verification of the portal.
+# WebAuthn is off unless authelia_webauthn is true (registering a key needs the one-time code of the notifier, see README).
+totp:
+  disable: false
+  issuer: '{{ authelia_totp_issuer }}'
+  algorithm: SHA1
+  digits: 6
+  period: 30
+  skew: 1
+  allowed_algorithms: [SHA1]
+  allowed_digits: [6]
+  allowed_periods: [30]
+  disable_reuse_security_policy: false
+webauthn:
+  disable: {{ (not authelia_webauthn | bool) | lower }}
+  display_name: '{{ authelia_totp_issuer }}'
+default_2fa_method: totp
+# Failed logins are counted per USERNAME: whoever knows a name can lock that account for ban_time (an unknown name locks nothing).
+# So: keep the names unlisted, the bans short, the retries moderate.
+regulation:
+  max_retries: {{ authelia_regulation_max_retries }}
+  find_time: {{ authelia_regulation_find_time }}
+  ban_time: {{ authelia_regulation_ban_time }}
+access_control:
+  default_policy: deny
+  rules:
+{% for rule in authelia_access_rules %}
+    - domain:
+{% for d in (rule.domain if rule.domain is not string else [rule.domain]) %}
+        - '{{ d }}'
+{% endfor %}
+      policy: '{{ rule.policy }}'
+{% if rule.subject | default([]) %}
+      subject:
+{% for s in rule.subject %}
+        - ['{{ s }}']
+{% endfor %}
+{% endif %}
+{% endfor %}
+authentication_backend:
+  refresh_interval: 5m
+  password_reset:
+    disable: true
+  password_change:
+    disable: true
+  file:
+    path: /config/users.yml
+identity_validation:
+  reset_password:
+    jwt_secret: '{{ cluster_authelia_reset_password_jwt_secret }}'
+session:
+  # sessions are in memory (no redis): they end with the authelia process, a redeploy logs everybody out. The second factors do not (storage below).
+  secret: '{{ cluster_authelia_session_secret }}'
+  inactivity: {{ authelia_session_inactivity }}
+  expiration: {{ authelia_session_expiration }}
+  remember_me: {{ authelia_session_remember_me }}
+  cookies:
+    - domain: '{{ cluster_domain }}'
+      authelia_url: 'https://auth.{{ cluster_domain }}'
+      same_site: lax
+storage:
+  encryption_key: '{{ cluster_authelia_storage_encryption_key }}'
+  local:
+    # the host volume "authelia" (/srv/authelia on the node, see jobs/authelia.nomad.hcl): totp secrets, devices, bans
+    path: /data/db.sqlite3
+notifier:
+  filesystem:
+    filename: /data/notification.txt

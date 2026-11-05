@@ -1,0 +1,18 @@
+---
+collections:
+  - name: community.general # connection plugin community.general.incus, apk module
+    version: 13.5.0
+  - name: cloud.terraform # inventory plugin cloud.terraform.terraform_provider
+    version: 4.0.0
+  - name: community.crypto # x509 / openssl modules for the leaf certs (needs py3-cryptography in the tools image)
+    version: 3.1.0
+  - name: ansible.posix # callback profile_tasks (per-task timing)
+    version: 2.1.0
+  - name: community.sops # reads sops/age encrypted vars and files (vars plugin + lookup)
+    version: 2.2.7
+
+roles:
+  - name: willshersystems.sshd # hardened sshd_config (supports alpine + debian/ubuntu, validates before reload)
+    src: https://github.com/willshersystems/ansible-sshd
+    scm: git
+    version: v0.34.0

@@ -1,0 +1,15 @@
+---
+extends: default
+rules:
+  line-length: disable        # long jinja expressions and ssh-style one-liners are normal here
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  document-start: enable
+  braces:
+    max-spaces-inside: 1
+ignore: |
+  *.sops.yml
+  .terraform/

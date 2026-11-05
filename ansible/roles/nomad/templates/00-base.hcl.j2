@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+name = "{{ inventory_hostname }}"
+region = "{{ cluster_region }}"
+datacenter = "{{ cluster_datacenter }}"
+data_dir = "{{ nomad_data_dir }}"
+log_level = "INFO"
+
+# rpc and serf listen on the cluster address only; the http api there and on loopback (local cli, tunnels, traefik)
+bind_addr = "{{ nomad_ip }}"
+addresses {
+  http = "127.0.0.1 {{ nomad_ip }}"
+}
+advertise {
+  http = "{{ nomad_ip }}"
+  rpc = "{{ nomad_ip }}"
+  serf = "{{ nomad_ip }}"
+}
+
+telemetry {
+  collection_interval = "15s"
+  prometheus_metrics = true
+  publish_allocation_metrics = true
+  publish_node_metrics = true
+}

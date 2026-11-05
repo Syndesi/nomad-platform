@@ -1,0 +1,51 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+# Replaces the table in one transaction (docker's and nomad's own tables are not touched).
+table inet {{ cluster_firewall_table }}
+delete table inet {{ cluster_firewall_table }}
+
+table inet {{ cluster_firewall_table }} {
+  chain input {
+    type filter hook input priority filter; policy drop;
+
+    iifname "lo" accept
+    ct state established,related accept
+    ct state invalid drop
+
+    # icmp (ping, path mtu) and ipv6 neighbour discovery; replies of the dhcp servers
+    ip protocol icmp accept
+    ip6 nexthdr icmpv6 accept
+    udp sport 67 udp dport 68 accept
+    udp sport 547 udp dport 546 accept
+
+    # ssh from anywhere
+    tcp dport 22 accept
+
+    # containers on the host's bridges (dns of docker0, consul connect, ...)
+    iifname { "docker0", "nomad", "br-*" } accept
+
+    # the cluster itself
+    ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } tcp dport { {{ cluster_firewall_tcp_ports | join(', ') }} } accept
+    ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } udp dport { {{ cluster_firewall_udp_ports | join(', ') }} } accept
+{% if cluster_firewall_public_tcp_ports %}
+
+    # ingress
+    tcp dport { {{ cluster_firewall_public_tcp_ports | join(', ') }} } accept
+{% endif %}
+{% if cluster_firewall_extra_rules | trim %}
+
+    # cluster_firewall_extra_rules
+{{ cluster_firewall_extra_rules | indent(4, true) }}
+{% endif %}
+
+    counter drop
+  }
+{% if cluster_firewall_cluster_only_ports %}
+
+  # published job ports for the cluster only (nat'ed traffic goes through forward, not input)
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+    iifname != { "docker0", "nomad", "br-*" } ip saddr != { {{ cluster_firewall_cluster_sources | join(', ') }} } tcp dport { {{ cluster_firewall_cluster_only_ports | join(', ') }} } ct status dnat counter drop
+  }
+{% endif %}
+}

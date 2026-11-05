@@ -1,0 +1,38 @@
+---
+# Config fragments that belong to the CLUSTER, not to the platform: every *.hcl.j2 in hashi_agent_extras_dir
+# (the cluster repo's nomad.d/ or consul.d/) is templated into the daemon's config dir, numbered 60-99
+# (the platform's own fragments are 00-50). A 60-99 fragment whose source file is gone is removed again.
+# Sets the fact hashi_agent_extras_changed for the caller (-> restart decision, config validation).
+# Input: hashi_agent_name, hashi_agent_config_dir, hashi_agent_extras_dir
+- name: "{{ hashi_agent_name }}: cluster fragments from {{ hashi_agent_extras_dir }}"
+  ansible.builtin.template:
+    src: "{{ item }}"
+    dest: "{{ hashi_agent_config_dir }}/{{ item | basename | regex_replace('[.]j2$', '') }}"
+    owner: root
+    group: root
+    mode: "0640"
+  loop: "{{ query('ansible.builtin.fileglob', hashi_agent_extras_dir ~ '/[6-9][0-9]-*.hcl.j2') | sort }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: hashi_agent_extras_written
+
+- name: "{{ hashi_agent_name }}: cluster fragments on the node"
+  ansible.builtin.find:
+    paths: "{{ hashi_agent_config_dir }}"
+    use_regex: true
+    patterns: ['^[6-9][0-9]-.*[.]hcl$']
+  register: hashi_agent_extras_present
+
+- name: "{{ hashi_agent_name }}: remove cluster fragments that are no longer in the cluster repo"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ hashi_agent_extras_present.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: item.path | basename not in (hashi_agent_extras_written.results | map(attribute='item') | map('basename') | map('regex_replace', '[.]j2$', '') | list)
+  register: hashi_agent_extras_removed
+
+- name: "{{ hashi_agent_name }}: cluster fragments changed?"
+  ansible.builtin.set_fact:
+    hashi_agent_extras_changed: "{{ hashi_agent_extras_written.changed or hashi_agent_extras_removed.changed }}"

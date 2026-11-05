@@ -1,0 +1,8 @@
+---
+# What makes this cluster THIS cluster. All variables and their defaults: base/docs/contract.md
+cluster_name: example
+cluster_domain: example.org # traefik publishes auth.<d>, nomad.<d>, consul.<d>, traefik.<d>
+cluster_acme_ca: internal # internal | letsencrypt-staging | letsencrypt | <acme directory url>
+cluster_acme_email: admin@example.org
+# Public ssh keys of humans that may log in as the ansible user (the automation key of `task ssh:init` is added by itself)
+cluster_ssh_authorized_keys: []

@@ -1,0 +1,35 @@
+---
+# What nomad's bridge networking (and with it consul connect sidecars) needs from the kernel: bridged
+# traffic must pass iptables. The cni plugins + iptables come with the package transaction in site.yml.
+- name: br_netfilter is loaded
+  community.general.modprobe:
+    name: br_netfilter
+    state: present
+
+# systemd reads /etc/modules-load.d, openrc's `modules` service /etc/modules
+- name: br_netfilter at boot (openrc)
+  ansible.builtin.lineinfile:
+    path: /etc/modules
+    line: br_netfilter
+    create: true
+    mode: "0644"
+  when: ansible_facts['service_mgr'] == 'openrc'
+
+- name: br_netfilter at boot (systemd)
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/br_netfilter.conf
+    content: "br_netfilter\n"
+    mode: "0644"
+  when: ansible_facts['service_mgr'] == 'systemd'
+
+- name: Bridged traffic goes through iptables
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    sysctl_file: /etc/sysctl.d/90-cluster-cni.conf
+    sysctl_set: true
+    reload: false
+    state: present
+  loop:
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables

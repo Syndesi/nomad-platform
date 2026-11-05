@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+[Unit]
+Description={{ hashi_agent_description }}
+Documentation=https://developer.hashicorp.com/{{ hashi_agent_name }}/docs
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart={{ hashi_agent_bin_dir }}/{{ hashi_agent_name }} {{ hashi_agent_args }}
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec={{ hashi_agent_restart_delay }}
+{% for line in hashi_agent_systemd_service_extra %}
+{{ line }}
+{% endfor %}
+
+[Install]
+WantedBy=multi-user.target

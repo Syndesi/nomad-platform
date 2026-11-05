@@ -1,0 +1,47 @@
+# The tools container of a cluster. The image is the same for every cluster (tag = tool versions), the container
+# is per cluster because the cluster repo is mounted at /work (the base repo is its submodule /work/base).
+# Used from the cluster repo with COMPOSE_FILE=base/tools/compose.yml[:compose.override.yml] (cluster .env), so
+# paths below are relative to this file's directory and the cluster repo is ${CLUSTER_DIR} (set by the Taskfile).
+services:
+  tools:
+    build:
+      context: ..
+      dockerfile: tools/Dockerfile
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION:?set ALPINE_VERSION in .env}
+      additional_contexts:
+        tofu: docker-image://ghcr.io/opentofu/opentofu:${TOFU_VERSION:?set TOFU_VERSION in .env}
+    image: nomad-platform-tools:tofu${TOFU_VERSION:?set TOFU_VERSION in .env}-alpine${ALPINE_VERSION:?set ALPINE_VERSION in .env}
+    container_name: ${CLUSTER_NAME:?set CLUSTER_NAME in .env}-tools
+    hostname: ${CLUSTER_NAME}-tools
+    # The image's entrypoint adds the passwd entry of the host user, its CMD is a shell: with tty + stdin_open it stays alive
+    # (no `sleep infinity`), and the work happens in `docker compose exec`.
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    init: true
+    # Run as the host user: files in the cluster repo stay owned by you.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /work
+    environment:
+      HOME: /tmp
+      TF_IN_AUTOMATION: "1"
+      ANSIBLE_CONFIG: /work/base/ansible/ansible.cfg
+      # the cluster repo as seen inside the container (the mount below); ansible and the scripts derive every path from it
+      CLUSTER_DIR: /work
+      # age identity for sops (mounted read-only below); public recipients live in .sops.yaml
+      SOPS_AGE_KEY_FILE: /age/keys.txt
+      PROFILE_TASKS_TASK_OUTPUT_LIMIT: "30"
+      PROFILE_TASKS_SORT_ORDER: descending
+      # Versions of the custom binaries (built by `task build`); the playbook installs exactly these.
+      NOMAD_VERSION: ${NOMAD_VERSION:?set NOMAD_VERSION in .env}
+      CONSUL_VERSION: ${CONSUL_VERSION:?set CONSUL_VERSION in .env}
+      # How the scripts and the tofu tunnel reach a node (%HOST% = the node name); default ssh as the ansible user
+      CLUSTER_EXEC: ${CLUSTER_EXEC:-}
+    volumes:
+      - ${CLUSTER_DIR:?run through the cluster Taskfile}:/work
+      # Locally built nomad/consul binaries (shared cache outside the repos); ansible copies them to the hosts.
+      - ${ARTIFACTS_DIR:-${HOME}/.cache/nomad-platform/artifacts}:/artifacts:ro
+      - ${AGE_KEY_DIR:-${CLUSTER_DIR}/secrets/age}:/age:ro
+      # the ssh key ansible and the scripts log in to the nodes with (task ssh:init)
+      - ${SSH_KEY_DIR:-${CLUSTER_DIR}/secrets/ssh}:/ssh:ro

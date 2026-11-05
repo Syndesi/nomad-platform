@@ -1,0 +1,10 @@
+version: "3"
+
+dotenv: [".env"]
+
+# Everything comes from the platform (base/); add tasks that only this cluster needs below `tasks:`.
+includes:
+  base:
+    taskfile: base/tasks/Taskfile.yml
+    flatten: true
+    dir: .

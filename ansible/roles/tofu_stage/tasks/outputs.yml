@@ -1,0 +1,49 @@
+---
+# Reads the outputs of a tofu root (tokens!) into a fact on localhost. Empty when the root has no
+# state yet (fresh deploy). Never written to disk.
+# Input: tofu_stage_name, tofu_stage_fact
+- name: "{{ tofu_stage_name }}: state exists"
+  ansible.builtin.stat:
+    path: "{{ tofu_stage_state_dir }}/terraform.tfstate"
+  delegate_to: localhost
+  become: false
+  register: tofu_stage_state
+
+# the plugin dir (.terraform) is not part of the cluster repo: a clone has the committed state but no initialised root
+- name: "{{ tofu_stage_name }}: init (a clone of the cluster repo has the state but not the plugin dir)"
+  when: tofu_stage_state.stat.exists
+  ansible.builtin.command:
+    argv:
+      - tofu
+      - "-chdir={{ tofu_stage_dir }}"
+      - init
+      - -input=false
+      - -no-color
+      - "-backend-config=path={{ tofu_stage_state_dir }}/terraform.tfstate"
+  environment:
+    TF_ENCRYPTION: "{{ tofu_stage_encryption }}"
+    TF_DATA_DIR: "{{ tofu_stage_state_dir }}/.terraform"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: "{{ tofu_stage_name }}: read outputs"
+  when: tofu_stage_state.stat.exists
+  ansible.builtin.command:
+    cmd: tofu -chdir={{ tofu_stage_dir }} output -json -no-color
+  environment:
+    TF_ENCRYPTION: "{{ tofu_stage_encryption }}"
+    TF_DATA_DIR: "{{ tofu_stage_state_dir }}/.terraform"
+  delegate_to: localhost
+  become: false
+  register: tofu_stage_outputs
+  changed_when: false
+  no_log: true
+
+- name: "{{ tofu_stage_name }}: outputs as fact"
+  ansible.builtin.set_fact:
+    "{{ tofu_stage_fact }}": >-
+      {{ dict((tofu_stage_outputs.stdout | default('{}') | from_json).keys() | zip((tofu_stage_outputs.stdout | default('{}') | from_json).values() | map(attribute='value'))) }}
+  delegate_to: localhost
+  delegate_facts: true
+  no_log: true

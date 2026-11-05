@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# Persistent state of authelia (sqlite: second factors, devices, bans). A plain folder on this node, made by the nomad role before the agent
+# starts; only nodes that may run authelia have it (cluster_authelia_hosts: the servers by default). Kept apart from the other host volumes
+# (40-client.hcl) on purpose: it belongs to the platform's authelia job, not to the cluster's own volume list.
+client {
+  host_volume "authelia" {
+    path = "{{ cluster_authelia_dir }}"
+    read_only = false
+  }
+}

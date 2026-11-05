@@ -1,0 +1,17 @@
+---
+# Docker for the nomad docker driver (both default jobs are containers).
+# The docker package itself comes with the one package transaction of the basics play (site.yml).
+# OpenRC: the cgroup hierarchy is mounted by the `cgroups` service; docker and nomad need it.
+- name: cgroups service (alpine)
+  ansible.builtin.service:
+    name: cgroups
+    runlevel: boot
+    enabled: true
+    state: started
+  when: ansible_facts['os_family'] == 'Alpine'
+
+- name: Docker enabled and running
+  ansible.builtin.service:
+    name: docker
+    enabled: true
+    state: started

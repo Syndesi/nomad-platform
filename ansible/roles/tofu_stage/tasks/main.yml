@@ -1,0 +1,69 @@
+---
+# Tofu manages the cluster's own objects (consul/nomad acl, variables); ansible only prepares its
+# inputs. Everything runs on the controller, delegated to localhost.
+- name: "{{ tofu_stage_name }}: variables file (tmpfs)"
+  delegate_to: localhost
+  become: false
+  no_log: true
+  block:
+    - name: Run directory
+      ansible.builtin.file:
+        path: "{{ cluster_run_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Variables file
+      ansible.builtin.copy:
+        content: "{{ tofu_stage_vars | to_nice_json }}\n"
+        dest: "{{ tofu_stage_varfile }}"
+        mode: "0600"
+
+- name: "{{ tofu_stage_name }}: apply through a tunnel"
+  delegate_to: localhost
+  become: false
+  environment:
+    TF_IN_AUTOMATION: "1"
+    TF_ENCRYPTION: "{{ tofu_stage_encryption }}"
+    TF_DATA_DIR: "{{ tofu_stage_state_dir }}/.terraform"
+  block:
+    - name: Tunnels to the consul and nomad api of the first server
+      ansible.builtin.command: >-
+        {{ cluster_base_dir }}/scripts/tunnel.sh up {{ item.port }}
+        {{ (tofu_stage_tunnel_command | replace('%PORT%', item.remote)) | quote }}
+      loop:
+        - { port: "{{ tofu_stage_consul_port }}", remote: "{{ cluster_consul_https_port }}" }
+        - { port: "{{ tofu_stage_nomad_port }}", remote: "{{ cluster_nomad_http_port }}" }
+      changed_when: false
+
+    - name: tofu init
+      ansible.builtin.command:
+        argv:
+          - tofu
+          - "-chdir={{ tofu_stage_dir }}"
+          - init
+          - -input=false
+          - -no-color
+          - "-backend-config=path={{ tofu_stage_state_dir }}/terraform.tfstate"
+      changed_when: false
+
+    - name: tofu apply
+      ansible.builtin.command:
+        argv:
+          - tofu
+          - "-chdir={{ tofu_stage_dir }}"
+          - apply
+          - -input=false
+          - -auto-approve
+          - -no-color
+          - "-var-file={{ tofu_stage_varfile }}"
+      register: tofu_stage_apply
+      changed_when: "'Resources: 0 added, 0 changed, 0 destroyed' not in tofu_stage_apply.stdout"
+  always:
+    - name: Close the tunnels
+      ansible.builtin.command:
+        cmd: "{{ cluster_base_dir }}/scripts/tunnel.sh down {{ item }}"
+      loop: ["{{ tofu_stage_consul_port }}", "{{ tofu_stage_nomad_port }}"]
+      changed_when: false
+
+- name: "{{ tofu_stage_name }}: outputs"
+  ansible.builtin.include_tasks: outputs.yml

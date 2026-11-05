@@ -1,0 +1,15 @@
+---
+# Consul agent: install, config fragments, (re)start. Servers and clients differ only in the
+# fragments (server flag, bootstrap_expect, certs vs auto_encrypt). The agent token only exists
+# after tofu-consul ran, so servers run `config` once more after that (see playbooks/site.yml).
+- name: Consul binary and service definition
+  ansible.builtin.include_role:
+    name: hashi_agent
+  vars:
+    hashi_agent_name: consul
+    hashi_agent_version: "{{ consul_version }}"
+    hashi_agent_args: "agent -config-dir {{ consul_config_dir }}"
+    hashi_agent_description: Consul agent
+
+- name: Consul config and start
+  ansible.builtin.include_tasks: config.yml

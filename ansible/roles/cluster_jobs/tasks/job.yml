@@ -1,0 +1,31 @@
+---
+# Input: cluster_jobs_item {name, vars}. The job is run like anyone would run it by hand:
+#   nomad job run -var-file=<name>.vars.json <name>.nomad.hcl
+# which also waits for the deployment (a failed deployment, including an auto_revert, fails the task).
+# Nomad does not bump the job version for an identical spec, so: run, compare versions.
+- name: "job {{ cluster_jobs_item.name }}: variables file"
+  ansible.builtin.copy:
+    content: "{{ cluster_jobs_common_vars | combine(cluster_jobs_item.vars) | to_nice_json }}\n"
+    dest: "{{ cluster_jobs_remote_dir }}/{{ cluster_jobs_item.name }}.vars.json"
+    mode: "0600"
+
+- name: "job {{ cluster_jobs_item.name }}: version before"
+  ansible.builtin.shell: "nomad job inspect {{ cluster_jobs_item.name }} | jq -r '.Job.Version'"
+  environment: "{{ cluster_jobs_env }}"
+  register: cluster_jobs_before
+  failed_when: false
+  changed_when: false
+
+- name: "job {{ cluster_jobs_item.name }}: run and wait for the deployment"
+  ansible.builtin.command: >-
+    nomad job run -var-file={{ cluster_jobs_remote_dir }}/{{ cluster_jobs_item.name }}.vars.json
+    {{ cluster_jobs_remote_dir }}/{{ cluster_jobs_item.name }}.nomad.hcl
+  environment: "{{ cluster_jobs_env }}"
+  register: cluster_jobs_run
+  changed_when: false
+
+- name: "job {{ cluster_jobs_item.name }}: version after"
+  ansible.builtin.shell: "nomad job inspect {{ cluster_jobs_item.name }} | jq -r '.Job.Version'"
+  environment: "{{ cluster_jobs_env }}"
+  register: cluster_jobs_after
+  changed_when: cluster_jobs_after.stdout != cluster_jobs_before.stdout

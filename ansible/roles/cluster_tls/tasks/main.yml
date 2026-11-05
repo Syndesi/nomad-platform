@@ -1,0 +1,103 @@
+---
+# Certificates by CSR: every key is generated ON the node it belongs to (never leaves it, never
+# exists on the controller); the controller only signs the CSR with the cluster CA, whose private
+# key stays sops-encrypted and is read into memory for the signing (variable cluster_ca_key).
+#   node.pem/key     nomad (rpc + https) and consul servers; consul clients get theirs from auto_encrypt
+#   ingress.pem/key  wildcard for traefik (internal CA mode), on the nodes in group cluster_ingress
+
+- name: The cluster CA is there
+  ansible.builtin.assert:
+    that:
+      - cluster_ca_key is defined
+      - cluster_ca_cert is file
+    fail_msg: "No CA: run `task pki:ca` once first."
+    quiet: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: TLS directory on the node
+  ansible.builtin.file:
+    path: "{{ cluster_tls_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Node certificate
+  ansible.builtin.include_tasks: issue.yml
+  vars:
+    cluster_tls_name: node
+    cluster_tls_cn: "{{ cluster_node_fqdn }}"
+    cluster_tls_sans: "{{ cluster_tls_node_sans }}"
+    cluster_tls_eku: serverAuth,clientAuth
+
+- name: Ingress certificate
+  ansible.builtin.include_tasks: issue.yml
+  vars:
+    cluster_tls_name: ingress
+    cluster_tls_cn: "*.{{ cluster_domain }}"
+    cluster_tls_sans: "{{ cluster_tls_ingress_sans }}"
+    cluster_tls_eku: serverAuth
+  when: cluster_tls_ingress
+
+- name: Install the CA certificate
+  ansible.builtin.copy:
+    src: "{{ cluster_ca_cert }}"
+    dest: "{{ cluster_tls_dir }}/ca.pem"
+    owner: root
+    group: root
+    mode: "0644"
+  register: cluster_tls_ca_install
+
+# The cli reads only environment variables. A profile.d file is only seen by login shells (not by
+# `incus exec`, the web terminal, su, cron), so instead the cli is wrapped: /usr/local/sbin comes
+# before /usr/local/bin in PATH on both distros, the real binary stays where the services run it.
+# Only address + CA are defaulted (public data); tokens are never baked in, and a variable that is
+# already set (e.g. NOMAD_ADDR) wins.
+- name: /usr/local/sbin exists (alpine has no such directory by default)
+  ansible.builtin.file:
+    path: /usr/local/sbin
+    state: directory
+    mode: "0755"
+
+- name: cli wrappers with the cluster address and CA
+  ansible.builtin.copy:
+    dest: "/usr/local/sbin/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      # managed by ansible (role cluster_tls)
+      {% for k, v in item.env.items() %}
+      export {{ k }}="${{ '{' }}{{ k }}:-{{ v }}}"
+      {% endfor %}
+      exec /usr/local/bin/{{ item.name }} "$@"
+  loop:
+    - name: nomad
+      env:
+        NOMAD_ADDR: "https://127.0.0.1:{{ cluster_nomad_http_port }}"
+        NOMAD_CACERT: "{{ cluster_tls_dir }}/ca.pem"
+    - name: consul
+      env:
+        CONSUL_HTTP_ADDR: "https://127.0.0.1:{{ cluster_consul_https_port }}"
+        CONSUL_CACERT: "{{ cluster_tls_dir }}/ca.pem"
+  loop_control:
+    label: "{{ item.name }}"
+
+# nomad and consul do not watch the files, but both re-read them on SIGHUP: no restart needed.
+# One command that reloads whatever runs (nothing on the very first run, no daemon exists yet).
+- name: Reload running consul / nomad so they pick up a new cert
+  ansible.builtin.shell: |
+    for d in consul nomad; do
+      {% if ansible_facts['service_mgr'] == 'systemd' %}
+      systemctl is-active --quiet $d && systemctl reload $d && echo "reloaded $d"
+      {% else %}
+      rc-service $d status >/dev/null 2>&1 && rc-service $d reload >/dev/null && echo "reloaded $d"
+      {% endif %}
+    done
+    true
+  register: cluster_tls_reload
+  changed_when: "'reloaded' in cluster_tls_reload.stdout"
+  when: cluster_tls_node_changed | default(false) or cluster_tls_ca_install.changed

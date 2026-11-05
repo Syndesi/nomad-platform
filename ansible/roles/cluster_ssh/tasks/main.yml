@@ -1,0 +1,78 @@
+---
+# Access to a node: the authorized keys of the ansible user and a hardened sshd. The account itself exists already
+# (scripts/node-bootstrap.sh, run by hand or by cloud-init) - this role cannot create the account it connects with.
+# Everything is validated (sshd -t) before sshd reloads; open sessions survive a reload.
+- name: Authorized keys of the ansible user (the automation key + the cluster's human keys, nothing else)
+  ansible.builtin.copy:
+    dest: "/home/{{ cluster_ansible_user }}/.ssh/authorized_keys"
+    content: |
+      {% for key in [lookup('ansible.builtin.file', cluster_ssh_key_file ~ '.pub') | trim] + cluster_ssh_authorized_keys %}
+      {{ key }}
+      {% endfor %}
+    owner: "{{ cluster_ansible_user }}"
+    group: "{{ cluster_ansible_user }}"
+    mode: "0600"
+
+- name: Hardened sshd (root and passwords off, restricted algorithms)
+  ansible.builtin.include_role:
+    name: willshersystems.sshd
+  vars:
+    sshd_skip_defaults: false
+    sshd_config:
+      HostKey: "{{ cluster_ssh_host_key_file }}"
+      PermitRootLogin: false
+      PasswordAuthentication: false
+      KbdInteractiveAuthentication: false
+      PermitEmptyPasswords: false
+      AuthenticationMethods: publickey
+      PubkeyAuthentication: true
+      KexAlgorithms: "{{ cluster_ssh_kex | join(',') }}"
+      Ciphers: "{{ cluster_ssh_ciphers | join(',') }}"
+      # the ciphers are AEAD and bring their own integrity check; this only fills the field
+      MACs: hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+      HostKeyAlgorithms: "{{ cluster_ssh_host_key_algorithms | join(',') }}"
+      PubkeyAcceptedAlgorithms: "{{ cluster_ssh_pubkey_algorithms | join(',') }}"
+      AllowTcpForwarding: false
+      AllowAgentForwarding: false
+      X11Forwarding: false
+      MaxAuthTries: 3
+      LoginGraceTime: 20
+
+# The role reloads sshd through handlers, which (a) do not run when a play fails later and (b) are skipped on systems that
+# start sshd through a socket unit (ubuntu 26.04). Either way a new sshd_config could sit on disk, unloaded, and the old,
+# looser settings would stay active. So the node remembers the checksum of the config its sshd was last reloaded with.
+- name: Checksum of the sshd config the role wrote
+  ansible.builtin.stat:
+    path: "{{ cluster_ssh_config_path }}"
+    checksum_algorithm: sha256
+  register: cluster_ssh_conf
+
+# an empty checksum (wrong path) would equal the empty marker and the reload would never happen
+- name: ... it exists
+  ansible.builtin.assert:
+    that: cluster_ssh_conf.stat.exists
+    fail_msg: "{{ cluster_ssh_config_path }} is not there: the sshd role writes its configuration somewhere else on this OS"
+    quiet: true
+
+- name: Checksum of the config sshd was last reloaded with
+  ansible.builtin.command: cat {{ cluster_ssh_loaded_file }}
+  register: cluster_ssh_loaded
+  changed_when: false
+  failed_when: false
+
+- name: Reload sshd (its running settings are not the ones on disk)
+  ansible.builtin.service:
+    name: "{{ 'ssh' if ansible_facts['os_family'] == 'Debian' else 'sshd' }}"
+    state: reloaded
+  when: cluster_ssh_conf.stat.checksum | default('') != (cluster_ssh_loaded.stdout | default('') | trim)
+
+- name: Remember it
+  ansible.builtin.copy:
+    content: "{{ cluster_ssh_conf.stat.checksum | default('') }}\n"
+    dest: "{{ cluster_ssh_loaded_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Privilege escalation (passwordless or with a password)
+  ansible.builtin.include_tasks: escalation.yml

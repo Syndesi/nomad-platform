@@ -1,0 +1,169 @@
+---
+# Defaults of the platform. A cluster repo overrides what it needs in its own inventory/group_vars/all/cluster.yml;
+# docs/contract.md lists what it MUST set (cluster_name, cluster_node_domain, cluster_domain, cluster_acme_email,
+# authelia_users) and what it can set. Secrets are never here: the cluster repo has secrets.sops.yml / ca.sops.yml.
+
+cluster_datacenter: dc1 # consul datacenter + nomad datacenter
+cluster_region: global # nomad region (appears in cert names: server.<region>.nomad)
+
+# Who issues the https certificates of the ingress (traefik):
+#   internal            wildcard cert signed by the cluster CA (no public DNS)
+#   letsencrypt-staging let's encrypt staging (untrusted by browsers, no rate limits)
+#   letsencrypt         let's encrypt production (needs public DNS + reachable ports 80/443)
+#   https://...         any other ACME directory URL
+cluster_acme_ca: internal
+
+# PKI (the CA itself is created once by `task pki:ca`)
+cluster_ca_valid_days: 3650
+cluster_leaf_valid_days: 365 # a leaf is re-issued by site.yml once half of this is over (maintenance always re-issues)
+
+# Ports used on the nodes (https only; the plain http apis are switched off)
+cluster_nomad_http_port: 4646
+cluster_consul_https_port: 8501
+
+# Docker images of the default jobs
+cluster_traefik_image: traefik:v3.7.1
+cluster_authelia_image: authelia/authelia:4.39.20
+
+# Host volumes of the nomad clients (nodes differ, so set this per node or per group in the cluster repo's
+# inventory/host_vars/<node>.yml or group_vars/<group>.yml; a list is replaced, not merged, so use one place per node):
+#   cluster_host_volumes:
+#     - { name: media, path: /srv/media }                  # read_only defaults to false
+#     - { name: backup, path: /mnt/backup, read_only: true }
+# The base creates missing directories, writes the nomad client config and registers the volume under <name>.
+cluster_host_volumes: []
+
+# --- derived, normally not changed ---------------------------------------------------------
+# The nodes find each other by their cluster address (cluster_interface), not by name: no DNS record or hosts entry is needed.
+# cluster_node_domain only names the nodes in their certificates (and is the resolver's search domain); defaults to cluster_domain.
+cluster_node_domain: "{{ cluster_domain }}"
+cluster_node_fqdn: "{{ inventory_hostname }}.{{ cluster_node_domain }}"
+cluster_servers_addrs: "{{ groups['cluster_servers'] | map('extract', hostvars, 'cluster_ip') | list }}"
+cluster_tls_dir: /etc/cluster/tls
+cluster_acme_directories:
+  letsencrypt: https://acme-v02.api.letsencrypt.org/directory
+  letsencrypt-staging: https://acme-staging-v02.api.letsencrypt.org/directory
+# '' = no ACME resolver (internal CA)
+cluster_acme_server: "{{ '' if cluster_acme_ca == 'internal' else cluster_acme_directories.get(cluster_acme_ca, cluster_acme_ca) }}"
+
+# Controller-side paths. cluster_dir is the cluster repo as the controller sees it (inside the tools container: the
+# mount point /work, passed in as $CLUSTER_DIR); everything else follows a fixed layout (docs/architecture.md).
+cluster_dir: "{{ lookup('ansible.builtin.env', 'CLUSTER_DIR') }}"
+cluster_base_dir: "{{ cluster_dir }}/base"
+cluster_ca_cert: "{{ cluster_dir }}/pki/ca.pem" # public; the key is cluster_ca_key from ca.sops.yml
+# the (encrypted) states and plugin dirs of the two tofu roots that run against the cluster
+cluster_state_dir: "{{ cluster_dir }}/state"
+# *.hcl.j2 files in these directories are templated into the daemons' config directories next to the base
+# fragments (00-50). Name them 60-... to 99-...; the base removes a 60-99 fragment on the node once the file is gone.
+cluster_nomad_fragments_dir: "{{ cluster_dir }}/nomad.d"
+cluster_consul_fragments_dir: "{{ cluster_dir }}/consul.d"
+# clear-text material (tfvars with tokens) only ever lives on tmpfs and disappears with the container
+cluster_run_dir: /dev/shm/cluster
+
+cluster_leaf_renew_before_days: "{{ (cluster_leaf_valid_days | int / 2) | int }}"
+
+# How ansible reaches the nodes: ssh as the unprivileged ansible user, privileges through sudo/doas (group_vars/alpine.yml,
+# ubuntu.yml; the plays that touch nodes say `become: true`)
+ansible_connection: "{{ 'local' if inventory_hostname == 'localhost' else 'ssh' }}"
+ansible_user: "{{ cluster_ansible_user }}"
+ansible_ssh_common_args: "-F {{ cluster_ssh_config_file }}"
+
+# Tokens minted by tofu (never written to disk by us: they are outputs of the encrypted tofu states).
+# Loaded into these facts on localhost by the first plays of site.yml / by tofu_stage.
+cluster_consul_out: "{{ hostvars['localhost']['tofu_out_consul'] | default({}) }}"
+cluster_nomad_out: "{{ hostvars['localhost']['tofu_out_nomad'] | default({}) }}"
+
+# --- access to the nodes (ssh) --------------------------------------------------------------
+# One unprivileged account does everything; root cannot log in over ssh. It is created on a node once by
+# scripts/node-bootstrap.sh (see the README); its keys are the automation key (task ssh:init) + cluster_ssh_authorized_keys.
+cluster_ansible_user: ansible
+cluster_ssh_authorized_keys: [] # public keys of humans that may log in as the ansible user (ssh <node>, then sudo/doas)
+# Restricted algorithms, on the nodes (sshd) and in the controller's ssh client alike. As soon as every distro in use ships
+# OpenSSH >= 10.6, 'ssh-mldsa44-ed25519' can be added (or replace ssh-ed25519) to the two key algorithm lists.
+cluster_ssh_kex: [mlkem768x25519-sha256]
+cluster_ssh_ciphers: [chacha20-poly1305@openssh.com, aes256-gcm@openssh.com]
+cluster_ssh_host_key_algorithms: [ssh-ed25519]
+cluster_ssh_pubkey_algorithms: [ssh-ed25519]
+# More lines for the controller's ssh config, e.g. a ProxyCommand for nodes that are not routable
+cluster_ssh_config_extra: ""
+
+# maintenance: reboot the nodes when updates want it. Default false: nodes with disk encryption need a password at boot, so
+# restarts are the operator's job; the maintenance run lists the nodes that want one (true = reboot the whole cluster at once)
+cluster_reboot_allowed: false
+
+# --- network: where the cluster listens ---------------------------------------------------------
+# The interface of the cluster-internal network (name as in `ip link`, e.g. enp3s0, eth0, wg0). Per node (host_vars) or for all.
+# '' = the interface of the default route. Nomad (rpc, serf, http), Consul (rpc, serf) and the nomad client's fingerprinted
+# address (service addresses, published ports of jobs) are bound to the address of this interface; the local http apis
+# also stay on 127.0.0.1. Nothing of the agents listens on 0.0.0.0 or on other interfaces.
+cluster_interface: ""
+cluster_interface_effective: "{{ cluster_interface | default('', true) or ansible_facts['default_ipv4']['interface'] }}"
+cluster_ip: "{{ ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')]['ipv4']['address'] }}"
+# the subnet of that interface (network/prefix); the firewall opens the cluster ports to it, traefik's wireguard sidecar keeps it direct
+cluster_subnets: >-
+  {{ [ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')]['ipv4']['network']
+      ~ '/' ~ ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')]['ipv4']['prefix']] }}
+
+# --- firewall -------------------------------------------------------------------------------------
+# nftables on every node (role cluster_firewall): input policy drop; ssh and (ingress nodes) 80/443 from anywhere, the nomad and
+# consul ports only from the cluster's subnet. false removes it again. Details and extra rules: roles/cluster_firewall/defaults.
+cluster_firewall_enabled: true
+
+# --- docker -------------------------------------------------------------------------------------
+# false: jobs cannot bind-mount arbitrary host paths (docker `volumes = [...]` with absolute paths). Paths relative to the
+# task directory (local/, secrets/) always work. Give jobs host data through `cluster_host_volumes` + `volume`/`volume_mount`
+# instead: only the directories (or files, e.g. a socket) you declared per node can be mounted.
+cluster_docker_volumes_enabled: false
+# Merged into /etc/docker/daemon.json (the platform writes `dns`); e.g. the nvidia runtime of a gpu node:
+#   cluster_docker_daemon_extra: { runtimes: { nvidia: { path: nvidia-container-runtime, args: [] } } }
+cluster_docker_daemon_extra: {}
+
+# --- authelia ---------------------------------------------------------------------------------------
+# Authelia keeps its sqlite database (second factors, devices, bans) in a plain folder on the node it runs on, offered to nomad as the host
+# volume "authelia" (fragment 55-authelia.hcl) and used by the job through a constraint on the client meta authelia = true. It runs on the
+# nodes in cluster_authelia_hosts, the servers by default. The folder is part of `task backup`.
+cluster_authelia_hosts: "{{ groups['cluster_servers'] | default([]) }}"
+cluster_authelia_dir: /srv/authelia
+# authelia sessions (in memory): a session ends after `inactivity` without a request or `expiration` after the login; "remember me" lengthens it
+authelia_session_inactivity: 168h # 7 days without a request end the session
+authelia_session_expiration: 168h # 7 days after the login the session ends whatever happened in between
+authelia_session_remember_me: 168h
+# the name an authenticator app shows for the account
+authelia_totp_issuer: "{{ cluster_domain }}"
+# WebAuthn (security keys): false by default, see README
+authelia_webauthn: false
+
+# Every access rule must be two_factor (site.yml checks); true allows one_factor / bypass / deny rules as well
+cluster_authelia_allow_weaker_policies: false
+
+# --- restore ---------------------------------------------------------------------------------------
+# Set by `task restore -- <backup>` only: the backup directory (as the tools container sees it) whose consul and nomad snapshots are restored while the
+# cluster is built (see playbooks/site.yml). cluster_restore_force allows it into a cluster that already runs workloads.
+cluster_restore_dir: ""
+cluster_restore_force: false
+
+# --- logs ---------------------------------------------------------------------------------------
+# Agent logs (nomad, consul, docker) are kept this many days, one file per day (alpine: logrotate, ubuntu: journald).
+cluster_log_retention_days: 7
+
+# --- consul ---------------------------------------------------------------------------------------
+# KV prefixes that nomad tasks (workload identity) may read in consul (templates `key`/`ls`). None by default.
+cluster_consul_task_kv_prefixes: []
+
+# --- traefik behind wireguard (optional) ------------------------------------------------------------
+# true: traefik runs in a bridge network together with a wireguard client in the same allocation (prestart sidecar), so the
+# tunnel lives in the allocation's own network namespace and no host service can drop it. Needs:
+#   cluster_wireguard_image  a wireguard client image whose entrypoint brings up /config/wg_confs/*.conf (e.g. the linuxserver one)
+#   `task wireguard:conf -- <wg0.conf>`  stores the wg-quick config sops-encrypted (inventory/group_vars/all/wireguard.sops.yml)
+cluster_traefik_wireguard: false
+cluster_wireguard_image: ""
+# traefik's prometheus metrics: own entry point and port, consul service "traefik-metrics", for the cluster only (the firewall limits it
+# to cluster_subnets), not routed by traefik. A scraper job finds them through consul.
+cluster_traefik_metrics: true
+cluster_traefik_metrics_port: 8082
+# networks traefik reaches directly, not through the tunnel (its AllowedIPs may be 0.0.0.0/0): by default the cluster subnet
+cluster_wireguard_bypass: "{{ cluster_subnets }}"
+
+# derived
+cluster_ssh_key_file: /ssh/ansible_ed25519 # inside the tools container, see tools/compose.yml (task ssh:init -- <key> uses your own)
+cluster_ssh_config_file: "{{ cluster_run_dir }}/ssh_config"

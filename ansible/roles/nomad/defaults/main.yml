@@ -1,0 +1,32 @@
+---
+nomad_version: "{{ lookup('ansible.builtin.env', 'NOMAD_VERSION') }}"
+nomad_config_dir: /etc/nomad.d
+nomad_data_dir: /var/lib/nomad
+nomad_is_server: "{{ inventory_hostname in groups['cluster_servers'] | default([]) }}"
+nomad_is_client: "{{ inventory_hostname in groups['cluster_clients'] | default([]) }}"
+nomad_ip: "{{ cluster_ip }}"
+nomad_interface: "{{ cluster_interface_effective }}"
+# docker capabilities jobs may add, beyond nomad's defaults: the wireguard sidecar of traefik needs net_admin (ingress nodes only)
+nomad_docker_extra_caps: "{{ ['net_admin'] if (cluster_traefik_wireguard and inventory_hostname in groups['cluster_ingress'] | default([])) else [] }}"
+nomad_docker_default_caps: [audit_write, chown, dac_override, fowner, fsetid, kill, mknod, net_bind_service, setfcap, setgid, setpcap, setuid, sys_chroot]
+
+# nomad agents register themselves in consul with this token (minted by tofu-consul)
+nomad_consul_token: "{{ (cluster_consul_out.service_tokens | default({}))['nomad-agent'] | default('') }}"
+
+# where the cni plugin binaries live (package: cni-plugins on alpine, containernetworking-plugins on ubuntu)
+nomad_cni_path: "{{ {'Alpine': '/usr/libexec/cni', 'Debian': '/usr/lib/cni'}[ansible_facts['os_family']] }}"
+
+# Authelia runs on the nodes in cluster_authelia_hosts (client meta authelia = true, the host volume of 55-authelia.hcl)
+nomad_authelia_enabled: "{{ nomad_is_client and inventory_hostname in cluster_authelia_hosts }}"
+
+# Client meta + host volumes. Nodes in group cluster_ingress may run traefik.
+nomad_client_meta: >-
+  {{ ({'traefik': 'true'} if inventory_hostname in groups['cluster_ingress'] | default([]) else {})
+     | combine({'authelia': 'true'} if nomad_authelia_enabled | bool else {}) }}
+nomad_host_volumes_dir: "{{ nomad_data_dir }}/volumes"
+# All host volumes of this node as {name, path, read_only}: the platform's (traefik's data on ingress nodes) plus the
+# cluster's own (cluster_host_volumes, per node or group in the cluster repo's inventory).
+nomad_host_volumes: >-
+  {{ ([{'name': 'traefik', 'path': nomad_host_volumes_dir ~ '/traefik', 'read_only': false}]
+      if inventory_hostname in groups['cluster_ingress'] | default([]) else [])
+     + (cluster_host_volumes | default([])) }}

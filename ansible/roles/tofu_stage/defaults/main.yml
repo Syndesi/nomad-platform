@@ -1,0 +1,40 @@
+---
+# Runs one tofu root against the live cluster, from the controller, through a tunnel.
+# Input: tofu_stage_name (a root of the base repo, base/tofu/<name>, e.g. tofu-consul), tofu_stage_vars (dict -> tfvars json)
+# and tofu_stage_fact (name of the fact on localhost that receives the root's outputs).
+tofu_stage_dir: "{{ cluster_base_dir }}/tofu/{{ tofu_stage_name }}"
+# The root is code of the base; its state and plugin dir belong to the cluster (encrypted state: may be committed)
+tofu_stage_state_dir: "{{ cluster_state_dir }}/{{ tofu_stage_name }}"
+# tfvars hold tokens and passwords: tmpfs only, gone with the container
+tofu_stage_varfile: "{{ cluster_run_dir }}/{{ tofu_stage_name }}.tfvars.json"
+
+# Both roots keep tokens in their state, so the state is encrypted client side (aes-gcm, key derived
+# from a passphrase that is part of the sops-encrypted secrets). `enforced`: an unencrypted state is refused.
+tofu_stage_encryption: |
+  key_provider "pbkdf2" "cluster" {
+    passphrase = "{{ cluster_tofu_state_passphrase }}"
+  }
+  method "aes_gcm" "cluster" {
+    keys = key_provider.pbkdf2.cluster
+  }
+  state {
+    method   = method.aes_gcm.cluster
+    enforced = true
+  }
+  plan {
+    method   = method.aes_gcm.cluster
+    enforced = true
+  }
+
+# Local ends of the tunnels (scripts/tunnel.sh). tofu talks to 127.0.0.1:<port>, which is in the
+# SANs of every node cert.
+tofu_stage_consul_port: 18501
+tofu_stage_nomad_port: 14646
+
+# How the tunnel reaches the api on the first server: the cluster's remote shell ($CLUSTER_EXEC from the
+# cluster .env, %HOST% = the node; same contract as the scripts) plus nc on the node. Default is ssh with the
+# controller's client config (cluster_ssh_config_file).
+# (nc: busybox on alpine, netcat-openbsd on ubuntu - installed with the base packages.)
+tofu_stage_server: "{{ groups['cluster_servers'][0] }}"
+tofu_stage_tunnel_command: >-
+  {{ (lookup('ansible.builtin.env', 'CLUSTER_EXEC') | default('', true) or 'ssh -F ' ~ cluster_ssh_config_file ~ ' %HOST%') | replace('%HOST%', tofu_stage_server) }} nc 127.0.0.1 %PORT%

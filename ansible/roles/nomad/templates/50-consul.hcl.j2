@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# Consul integration with workload identity: services and tasks get their consul tokens by
+# logging in with a nomad-signed JWT (auth method declared in tofu-nomad). Only the agents' own registration uses a static token.
+consul {
+  address = "127.0.0.1:{{ cluster_consul_https_port }}"
+  ssl = true
+  verify_ssl = true
+  ca_file = "{{ cluster_tls_dir }}/ca.pem"
+  # consul connect: the envoy sidecars bootstrap from the local agent (grpc over tls)
+  grpc_address = "127.0.0.1:8503"
+  grpc_ca_file = "{{ cluster_tls_dir }}/ca.pem"
+{% if nomad_consul_token %}
+  token = "{{ nomad_consul_token }}"
+{% endif %}
+}

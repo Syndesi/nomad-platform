@@ -1,0 +1,102 @@
+---
+- name: Environment of the cli
+  ansible.builtin.set_fact:
+    cluster_restore_env: >-
+      {{ {'CONSUL_HTTP_ADDR': 'https://127.0.0.1:' ~ cluster_consul_https_port, 'CONSUL_CACERT': cluster_tls_dir ~ '/ca.pem', 'CONSUL_HTTP_TOKEN': cluster_consul_management_token}
+         if cluster_restore_product == 'consul' else
+         {'NOMAD_ADDR': 'https://127.0.0.1:' ~ cluster_nomad_http_port, 'NOMAD_CACERT': cluster_tls_dir ~ '/ca.pem', 'NOMAD_TOKEN': cluster_nomad_management_token} }}
+  no_log: true
+
+# A restore replaces the whole database. Never into a cluster that already runs workloads (cluster_restore_force overrides).
+- name: "{{ cluster_restore_product }}: what is registered in the target cluster (consul catalog / nomad jobs)"
+  ansible.builtin.uri:
+    url: >-
+      {{ 'https://127.0.0.1:' ~ cluster_consul_https_port ~ '/v1/catalog/services' if cluster_restore_product == 'consul'
+         else 'https://127.0.0.1:' ~ cluster_nomad_http_port ~ '/v1/jobs' }}
+    headers: "{{ {'X-Consul-Token': cluster_consul_management_token} if cluster_restore_product == 'consul' else {'X-Nomad-Token': cluster_nomad_management_token} }}"
+    ca_path: "{{ cluster_tls_dir }}/ca.pem"
+    return_content: true
+    status_code: 200
+  register: cluster_restore_present
+  no_log: true
+  changed_when: false
+
+- name: "{{ cluster_restore_product }}: the target is empty"
+  ansible.builtin.assert:
+    that: >-
+      cluster_restore_force | bool or
+      (cluster_restore_product == 'consul' and (cluster_restore_present.json.keys() | list | difference(['consul'])) | length == 0) or
+      (cluster_restore_product == 'nomad' and cluster_restore_present.json | length == 0)
+    fail_msg: >-
+      This cluster already has workloads ({{ cluster_restore_product }}). A restore replaces everything in it and is meant for a cluster that was
+      just built. Run it with -e cluster_restore_force=true if that is what you want.
+    quiet: true
+
+- name: "{{ cluster_restore_product }} snapshot: decrypt, copy to the node, inspect, restore"
+  block:
+    - name: Directory on the node (tmpfs, root only)
+      ansible.builtin.file:
+        path: "{{ cluster_restore_node_dir }}"
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    - name: Decrypt on the controller (tmpfs)
+      ansible.builtin.shell: >-
+        set -o pipefail; umask 077;
+        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/' ~ cluster_restore_product ~ '.snap.age') | quote }}
+        > {{ (cluster_run_dir ~ '/restore-' ~ cluster_restore_product ~ '.snap') | quote }}
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Copy to the node
+      ansible.builtin.copy:
+        src: "{{ cluster_run_dir }}/restore-{{ cluster_restore_product }}.snap"
+        dest: "{{ cluster_restore_node_dir }}/{{ cluster_restore_product }}.snap"
+        mode: "0600"
+        owner: root
+        group: root
+
+    - name: Inspect the snapshot (the product reads it before anything is replaced)
+      ansible.builtin.command: >-
+        {{ 'consul snapshot inspect' if cluster_restore_product == 'consul' else 'nomad operator snapshot inspect' }}
+        {{ cluster_restore_node_dir }}/{{ cluster_restore_product }}.snap
+      environment: "{{ cluster_restore_env }}"
+      no_log: true
+      changed_when: false
+
+    - name: Restore
+      ansible.builtin.command: >-
+        {{ 'consul snapshot restore' if cluster_restore_product == 'consul' else 'nomad operator snapshot restore' }}
+        {{ cluster_restore_node_dir }}/{{ cluster_restore_product }}.snap
+      environment: "{{ cluster_restore_env }}"
+      no_log: true
+      changed_when: true
+
+    - name: Consul answers again (leader elected)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ cluster_consul_https_port }}/v1/status/leader"
+        ca_path: "{{ cluster_tls_dir }}/ca.pem"
+        return_content: true
+      register: cluster_restore_consul_leader
+      until: cluster_restore_consul_leader.status | default(0) == 200 and (cluster_restore_consul_leader.content | trim) not in ['', '""']
+      retries: 30
+      delay: 2
+      changed_when: false
+      when: cluster_restore_product == 'consul'
+  always:
+    - name: Remove the snapshot from the node
+      ansible.builtin.file:
+        path: "{{ cluster_restore_node_dir }}"
+        state: absent
+
+    - name: Remove the clear-text snapshot from the controller
+      ansible.builtin.file:
+        path: "{{ cluster_run_dir }}/restore-{{ cluster_restore_product }}.snap"
+        state: absent
+      delegate_to: localhost
+      become: false

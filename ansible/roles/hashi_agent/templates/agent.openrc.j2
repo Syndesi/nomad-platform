@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# {{ ansible_managed }}
+
+name="{{ hashi_agent_name }}"
+description="{{ hashi_agent_description }}"
+
+# supervise-daemon restarts the agent when it exits (the systemd units' Restart=always);
+# respawn_max=0 means unlimited.
+supervisor="supervise-daemon"
+command="{{ hashi_agent_bin_dir }}/{{ hashi_agent_name }}"
+command_args="{{ hashi_agent_args }}"
+output_log="{{ hashi_agent_openrc_log }}"
+error_log="{{ hashi_agent_openrc_log }}"
+respawn_delay={{ hashi_agent_restart_delay }}
+respawn_max=0
+{% if hashi_agent_openrc_ulimit %}
+rc_ulimit="{{ hashi_agent_openrc_ulimit }}"
+{% endif %}
+
+# `rc-service <name> reload` = SIGHUP: nomad and consul re-read their TLS files and tokens that way.
+extra_started_commands="reload"
+reload() {
+    ebegin "Reloading ${RC_SVCNAME}"
+    supervise-daemon "${RC_SVCNAME}" --signal HUP
+    eend $?
+}
+
+depend() {
+    need net
+    after net
+}

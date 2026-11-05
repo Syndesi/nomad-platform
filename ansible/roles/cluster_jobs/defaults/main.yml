@@ -1,0 +1,39 @@
+---
+cluster_jobs_local_dir: "{{ cluster_base_dir }}/jobs"
+cluster_jobs_remote_dir: /etc/cluster/jobs
+cluster_jobs_env:
+  NOMAD_ADDR: "https://127.0.0.1:{{ cluster_nomad_http_port }}"
+  NOMAD_CACERT: "{{ cluster_tls_dir }}/ca.pem"
+  NOMAD_TOKEN: "{{ cluster_nomad_management_token }}"
+
+# ACME resolver name used inside traefik; '' = ingress cert from the cluster CA
+cluster_jobs_tls_resolver: "{{ '' if cluster_acme_ca == 'internal' else 'le' }}"
+
+cluster_jobs_common_vars:
+  datacenter: "{{ cluster_datacenter }}"
+  domain: "{{ cluster_domain }}"
+  tls_resolver: "{{ cluster_jobs_tls_resolver }}"
+
+# job file -> extra -var values. Order matters: authelia first (traefik's protected routes use its forward-auth service).
+cluster_jobs_list:
+  - name: authelia
+    vars:
+      image: "{{ cluster_authelia_image }}"
+  - name: traefik
+    templates: true
+    vars:
+      templates_dir: "{{ cluster_jobs_remote_dir }}/traefik"
+      image: "{{ cluster_traefik_image }}"
+      consul_port: "{{ cluster_consul_https_port }}"
+      nomad_port: "{{ cluster_nomad_http_port }}"
+      wireguard: "{{ cluster_traefik_wireguard | bool | to_json }}"
+      wireguard_image: "{{ cluster_wireguard_image }}"
+      wireguard_bypass: "{{ cluster_wireguard_bypass }}"
+      metrics_port: "{{ cluster_traefik_metrics_port if cluster_traefik_metrics | bool else 0 }}"
+      acme_server: "{{ cluster_acme_server }}"
+      acme_email: "{{ cluster_acme_email }}"
+
+# authelia login regulation (per username): this many failures within find_time ban the user for ban_time
+authelia_regulation_max_retries: 5
+authelia_regulation_find_time: 5m
+authelia_regulation_ban_time: 5m

@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# Same CA as consul. Servers verify peers by name (server.<region>.nomad, from the leaf SANs).
+tls {
+  http = true
+  rpc = true
+  ca_file = "{{ cluster_tls_dir }}/ca.pem"
+  cert_file = "{{ cluster_tls_dir }}/node.pem"
+  key_file = "{{ cluster_tls_dir }}/node.key"
+  verify_server_hostname = true
+  # browsers / cli have no client cert; access is controlled by ACL tokens instead
+  verify_https_client = false
+}

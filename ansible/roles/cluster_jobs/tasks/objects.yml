@@ -1,0 +1,22 @@
+---
+# tofu-nomad: workload identity (consul side), nomad acl policies + tokens, the job variables.
+# Runs on localhost (play hosts: localhost), so `--limit <node>` runs cannot skip it.
+- name: Nomad acl, workload identity and job variables (tofu-nomad)
+  ansible.builtin.include_role:
+    name: tofu_stage
+  vars:
+    tofu_stage_name: tofu-nomad
+    tofu_stage_fact: tofu_out_nomad
+    cluster_jobs_first_server: "{{ groups['cluster_servers'][0] }}"
+    tofu_stage_vars:
+      consul_address: "127.0.0.1:{{ tofu_stage_consul_port }}"
+      consul_token: "{{ cluster_consul_management_token }}"
+      nomad_jwks_url: "https://{{ hostvars[cluster_jobs_first_server].cluster_ip }}:{{ cluster_nomad_http_port }}/.well-known/jwks.json"
+      nomad_address: "https://127.0.0.1:{{ tofu_stage_nomad_port }}"
+      ca_file: "{{ cluster_ca_cert }}"
+      nomad_token: "{{ cluster_nomad_management_token }}"
+      datacenter: "{{ cluster_datacenter }}"
+      task_kv_prefixes: "{{ cluster_consul_task_kv_prefixes }}"
+      traefik_consul_token: "{{ cluster_consul_out.service_tokens.traefik }}"
+      authelia_configuration: "{{ lookup('ansible.builtin.template', 'authelia-configuration.yml.j2') }}"
+      authelia_users: "{{ lookup('ansible.builtin.template', 'authelia-users.yml.j2') }}"

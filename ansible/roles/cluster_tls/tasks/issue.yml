@@ -1,0 +1,64 @@
+---
+# One certificate by CSR.
+# Input: cluster_tls_name (file base name), cluster_tls_cn, cluster_tls_sans (subjectAltName value),
+#        cluster_tls_eku. Files: <tls dir>/<name>.key|.pem and <name>.sans (what the cert was issued for).
+- name: "{{ cluster_tls_name }}: is the cert still good?"
+  ansible.builtin.shell: |
+    d={{ cluster_tls_dir }}; n={{ cluster_tls_name }}
+    [ -s "$d/$n.key" ] && [ -s "$d/$n.pem" ] || { echo missing; exit 0; }
+    [ "$(cat "$d/$n.sans" 2>/dev/null)" = {{ cluster_tls_sans | quote }} ] || { echo sans-changed; exit 0; }
+    openssl x509 -in "$d/$n.pem" -noout -checkend {{ cluster_leaf_renew_before_days * 86400 }} >/dev/null || { echo expiring; exit 0; }
+    echo ok
+  register: cluster_tls_state
+  changed_when: false
+
+- name: "{{ cluster_tls_name }}: new key, CSR, signature"
+  when: cluster_pki_force | bool or cluster_tls_state.stdout != 'ok'
+  block:
+    - name: "{{ cluster_tls_name }}: key and CSR on the node"
+      ansible.builtin.shell: |
+        umask 077
+        d={{ cluster_tls_dir }}; n={{ cluster_tls_name }}
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+          -keyout "$d/$n.key.new" -out "$d/$n.csr" \
+          -subj {{ ('/O=' ~ cluster_name ~ ' cluster/CN=' ~ cluster_tls_cn) | quote }} \
+          -addext {{ ('subjectAltName=' ~ cluster_tls_sans) | quote }} \
+          -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+          -addext "extendedKeyUsage={{ cluster_tls_eku }}"
+        cat "$d/$n.csr"
+      register: cluster_tls_csr
+      changed_when: true
+
+    - name: "{{ cluster_tls_name }}: sign with the cluster CA (on the controller, in memory)"
+      community.crypto.x509_certificate_pipe:
+        csr_content: "{{ cluster_tls_csr.stdout }}"
+        provider: ownca
+        ownca_content: "{{ lookup('ansible.builtin.file', cluster_ca_cert) }}"
+        ownca_privatekey_content: "{{ cluster_ca_key }}"
+        ownca_not_after: "+{{ cluster_leaf_valid_days }}d"
+        ownca_not_before: "-5m"
+      delegate_to: localhost
+      become: false
+      register: cluster_tls_signed
+      no_log: true
+
+    - name: "{{ cluster_tls_name }}: certificate on the node"
+      ansible.builtin.copy:
+        content: "{{ cluster_tls_signed.certificate }}"
+        dest: "{{ cluster_tls_dir }}/{{ cluster_tls_name }}.pem.new"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # key and cert switch together, then the daemons are reloaded (see main.yml)
+    - name: "{{ cluster_tls_name }}: put key and cert in place"
+      ansible.builtin.shell: |
+        d={{ cluster_tls_dir }}; n={{ cluster_tls_name }}
+        mv "$d/$n.key.new" "$d/$n.key" && mv "$d/$n.pem.new" "$d/$n.pem"
+        printf '%s' {{ cluster_tls_sans | quote }} > "$d/$n.sans"
+        rm -f "$d/$n.csr"
+      changed_when: true
+
+    - name: "{{ cluster_tls_name }}: remember that it changed"
+      ansible.builtin.set_fact:
+        cluster_tls_node_changed: "{{ cluster_tls_node_changed | default(false) or cluster_tls_name == 'node' }}"

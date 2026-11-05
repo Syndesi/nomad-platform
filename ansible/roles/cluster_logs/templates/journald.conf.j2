@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+[Journal]
+Storage=persistent
+MaxFileSec=1day
+MaxRetentionSec={{ cluster_log_retention_days }}day

@@ -1,0 +1,39 @@
+# {{ ansible_managed }}
+tls {
+  defaults {
+    ca_file = "{{ cluster_tls_dir }}/ca.pem"
+{% if consul_is_server %}
+    cert_file = "{{ cluster_tls_dir }}/node.pem"
+    key_file = "{{ cluster_tls_dir }}/node.key"
+    verify_incoming = true
+{% endif %}
+    verify_outgoing = true
+  }
+  internal_rpc {
+    verify_server_hostname = true
+  }
+  grpc {
+    cert_file = "{{ cluster_tls_dir }}/node.pem"
+    key_file = "{{ cluster_tls_dir }}/node.key"
+    verify_incoming = false
+  }
+  https {
+    # auto_encrypt certs come from consul's own connect CA, so the local https api (used by
+    # nomad, traefik, the cli) serves the node leaf cert signed by the cluster CA instead
+    cert_file = "{{ cluster_tls_dir }}/node.pem"
+    key_file = "{{ cluster_tls_dir }}/node.key"
+    # browsers / cli have no client cert; access is controlled by ACL tokens instead
+    verify_incoming = false
+  }
+}
+
+{% if consul_is_server %}
+# servers hand out client certs, clients need no cert files of their own
+auto_encrypt {
+  allow_tls = true
+}
+{% else %}
+auto_encrypt {
+  tls = true
+}
+{% endif %}

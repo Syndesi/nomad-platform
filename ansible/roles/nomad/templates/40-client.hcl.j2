@@ -1,0 +1,43 @@
+# {{ ansible_managed }}
+client {
+  enabled = true
+  # service addresses and published ports use this interface
+  network_interface = "{{ nomad_interface }}"
+  # consul connect: sidecars run in a bridge network built from these cni plugins
+  cni_path = "{{ nomad_cni_path }}"
+  options {
+    # the driver Nomad's own tests use (fake tasks); it is built into source builds and has no use on a cluster
+    "driver.denylist" = "mock_driver"
+  }
+  servers = {{ (cluster_servers_addrs | map('regex_replace', '$', ':4647') | list) | to_json }}
+{% if nomad_client_meta %}
+  meta {
+{% for k, v in nomad_client_meta.items() %}
+    {{ k }} = "{{ v }}"
+{% endfor %}
+  }
+{% endif %}
+{% for vol in nomad_host_volumes %}
+  host_volume "{{ vol.name }}" {
+    path = "{{ vol.path }}"
+    read_only = {{ vol.read_only | default(false) | lower }}
+  }
+{% endfor %}
+}
+
+plugin "docker" {
+  config {
+    extra_labels = ["job_name", "task_group_name", "task_name", "namespace", "node_name"]
+    pull_activity_timeout = "10m"
+    # false (default): no bind mounts of arbitrary host paths; jobs use the host volumes declared per node
+    volumes {
+      enabled = {{ cluster_docker_volumes_enabled | bool | lower }}
+    }
+{% if nomad_docker_extra_caps %}
+    allow_caps = {{ (nomad_docker_default_caps + nomad_docker_extra_caps) | to_json }}
+{% endif %}
+    gc {
+      image = false
+    }
+  }
+}

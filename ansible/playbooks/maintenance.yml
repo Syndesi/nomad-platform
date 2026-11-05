@@ -1,0 +1,186 @@
+---
+# Maintenance, run when you want (monthly, yearly, ...):
+#   1. install ALL package updates on every node (in parallel)
+#   2. reboot the whole cluster at once if updates want it and cluster_reboot_allowed is true, then wait until consul and
+#      nomad answer again; false (the default: nodes with disk encryption need a password at boot) = reboots are yours,
+#      the nodes that want one are listed at the very end
+#   3. replace the leaf cert, node by node: a NEW key + CSR on the node, signed here with the CA, installed
+#   4. daemons re-read the files on SIGHUP (role cluster_tls does that, no restart needed);
+#      verify the cert they actually SERVE, and restart only a daemon that still serves the old one
+#   5. report how long every leaf cert and the CA stay valid
+# -e cluster_pki_force=false  = renew only certs inside cluster_leaf_renew_before_days (half of cluster_leaf_valid_days)
+# Docker images are not touched: they belong to the nomad job definitions.
+
+- name: Controller preparation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: CA present (certificate + sops-encrypted key)
+      ansible.builtin.assert:
+        that:
+          - cluster_ca_cert is file
+          - cluster_ca_key is defined
+        quiet: true
+
+    - name: ssh client config
+      ansible.builtin.template:
+        src: "{{ cluster_base_dir }}/ansible/templates/ssh_config.j2"
+        dest: "{{ cluster_ssh_config_file }}"
+        mode: "0600"
+
+- name: Install all package updates
+  hosts: cluster_servers:cluster_clients
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Upgrade packages (ubuntu)
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        autoremove: true
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Upgrade packages (alpine)
+      community.general.apk:
+        update_cache: true
+        upgrade: true
+      when: ansible_facts['os_family'] == 'Alpine'
+
+    - name: Does the OS want a reboot? (ubuntu, flag file)
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: maintenance_reboot_flag
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Does the OS want a reboot? (alpine, the newest installed kernel is not the running one)
+      ansible.builtin.shell: |
+        newest=$(ls /lib/modules | sort -V | tail -1)
+        [ "$newest" = "$(uname -r)" ] || echo reboot
+      register: maintenance_reboot_kernel
+      changed_when: false
+      when: ansible_facts['os_family'] == 'Alpine'
+
+    - name: Remember
+      ansible.builtin.set_fact:
+        maintenance_needs_reboot: >-
+          {{ ((maintenance_reboot_flag.stat.exists | default(false)) or ('reboot' in (maintenance_reboot_kernel.stdout | default('')))) | bool }}
+
+- name: Reboot the cluster when updates want it
+  hosts: cluster_servers:cluster_clients
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Reboot needed but not allowed (cluster_reboot_allowed=false)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} needs a reboot"
+      when: maintenance_needs_reboot | bool and not cluster_reboot_allowed | bool
+
+    - name: Reboot (the whole cluster at once; Alpine's busybox shutdown takes no message)
+      ansible.builtin.reboot:
+        reboot_command: reboot
+        reboot_timeout: 600
+      when: maintenance_needs_reboot | bool and cluster_reboot_allowed | bool
+      register: maintenance_rebooted
+
+    - name: Nomad answers again
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ cluster_nomad_http_port }}/v1/agent/self"
+        ca_path: "{{ cluster_tls_dir }}/ca.pem"
+        status_code: [200, 403]
+      register: maintenance_nomad
+      until: maintenance_nomad.status | default(0) in [200, 403]
+      retries: 120
+      delay: 2
+      changed_when: false
+      when: maintenance_rebooted is changed
+
+- name: Replace leaf certs
+  hosts: cluster_servers:cluster_clients
+  become: true
+  serial: 1
+  gather_facts: false
+  vars:
+    cluster_pki_force: true
+  tasks:
+    - name: Replace the leaf cert (reloads running daemons)
+      ansible.builtin.include_role:
+        name: cluster_tls
+
+    - name: Which daemons run here?
+      ansible.builtin.service_facts:
+
+    - name: Serial of the new leaf cert
+      ansible.builtin.command: openssl x509 -noout -serial -in {{ cluster_tls_dir }}/node.pem
+      register: maintenance_file_serial
+      changed_when: false
+
+    - name: Serial each daemon actually serves
+      ansible.builtin.shell: >-
+        openssl s_client -connect 127.0.0.1:{{ item.port }} -CAfile {{ cluster_tls_dir }}/ca.pem
+        -verify_return_error </dev/null 2>/dev/null | openssl x509 -noout -serial
+      loop: "{{ maintenance_daemons }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: maintenance_served
+      changed_when: false
+      failed_when: false
+      vars:
+        maintenance_daemons: >-
+          {{ [{'name': 'nomad', 'port': cluster_nomad_http_port}]
+             + ([{'name': 'consul', 'port': cluster_consul_https_port}] if inventory_hostname in groups['cluster_servers'] else []) }}
+
+    - name: Restart a daemon that did not pick the new cert up on reload
+      ansible.builtin.service:
+        name: "{{ item.item.name }}"
+        state: restarted
+      loop: "{{ maintenance_served.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.stdout != maintenance_file_serial.stdout
+
+    - name: Daemons serve the new cert
+      ansible.builtin.shell: >-
+        openssl s_client -connect 127.0.0.1:{{ item.item.port }} -CAfile {{ cluster_tls_dir }}/ca.pem
+        -verify_return_error </dev/null 2>/dev/null | openssl x509 -noout -serial
+      loop: "{{ maintenance_served.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      register: maintenance_recheck
+      until: maintenance_recheck.stdout == maintenance_file_serial.stdout
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    - name: Reload or restart outcome
+      ansible.builtin.debug:
+        msg: "{{ item.item.item.name }}: {{ 'reload was enough' if item.item.stdout == maintenance_file_serial.stdout else 'needed a restart' }}"
+      loop: "{{ maintenance_recheck.results }}"
+      loop_control:
+        label: "{{ inventory_hostname }}"
+
+- name: Ingress certificate and jobs
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: true
+  roles:
+    - cluster_jobs # the new ingress cert (made on the node above) -> nomad variable -> traefik re-renders its template
+
+- name: Validity report
+  ansible.builtin.import_playbook: pki-info.yml
+
+- name: Reboot report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Nodes that want a reboot (updates installed, kernel or libraries not yet in use)
+      ansible.builtin.debug:
+        msg: "reboot needed on: {{ pending | join(', ') if pending else 'no node' }}"
+      vars:
+        pending: >-
+          {{ (groups['cluster_servers'] + groups['cluster_clients']) | unique
+             | select('in', hostvars.keys()) | map('extract', hostvars)
+             | selectattr('maintenance_needs_reboot', 'defined')
+             | selectattr('maintenance_needs_reboot', 'true') | map(attribute='inventory_hostname') | list }}
+      when: not cluster_reboot_allowed | bool

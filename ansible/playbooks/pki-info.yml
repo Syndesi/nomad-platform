@@ -1,0 +1,33 @@
+---
+# Validity of the CA and of every certificate, read from the nodes (the leaf keys and certs only exist there).
+- name: Certificate validity report
+  hosts: cluster_servers:cluster_clients
+  become: true
+  gather_facts: false
+  tasks:
+    - name: End dates on the node
+      ansible.builtin.shell: |
+        for f in {{ cluster_tls_dir }}/node.pem {{ cluster_tls_dir }}/ingress.pem; do
+          [ -s "$f" ] || continue
+          printf '%s|%s\n' "$(basename "$f" .pem)" "$(openssl x509 -in "$f" -noout -enddate | cut -d= -f2)"
+        done
+      register: pki_info_raw
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ pki_info_raw.stdout_lines | map('regex_replace', '^(.*)[|](.*)$', '\\1 valid until \\2') | join('; ') }}"
+
+- name: CA
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: CA validity
+      community.crypto.x509_certificate_info:
+        path: "{{ cluster_ca_cert }}"
+      register: pki_info_ca
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "CA valid until {{ pki_info_ca.not_after }}"

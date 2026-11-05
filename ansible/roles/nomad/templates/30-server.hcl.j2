@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+server {
+  enabled = true
+  bootstrap_expect = {{ groups['cluster_servers'] | length }}
+  encrypt = "{{ cluster_nomad_gossip_key }}"
+  job_gc_threshold = "168h"
+  # a new server only needs this file to join
+  server_join {
+    retry_join = {{ (cluster_servers_addrs | map('regex_replace', '$', ':4648') | list) | to_json }}
+  }
+}

@@ -1,0 +1,23 @@
+---
+# Host firewall: one nftables table `inet cluster` of its own (docker and nomad keep theirs), loaded at boot by the unit /
+# init script `cluster-firewall` on both OS families. The input chain drops by default and accepts:
+#   - loopback, established connections, icmp, dhcp replies
+#   - ssh (22) from anywhere (no source restriction: a wrong list would lock you out)
+#   - the nomad and consul ports (rpc, serf, http) only from cluster_firewall_cluster_sources
+#   - traefik's 80 and 443 on the ingress nodes, from anywhere
+#   - everything that comes from the container bridges (docker0, nomad, br-*): dns, consul connect, traefik behind wireguard
+# Jobs publish no ports of their own here (forgejo's ssh goes through traefik too), so the forward chain is not touched.
+cluster_firewall_file: /etc/cluster/firewall.nft
+cluster_firewall_table: cluster
+
+# The cluster's network: by default the subnet of cluster_interface. More entries (a second site over wireguard, ...) are added here.
+cluster_firewall_cluster_sources: "{{ cluster_subnets }}"
+# Raw nft rules appended to the input chain before the final drop (the cluster's own services), e.g. "tcp dport 9100 accept"
+cluster_firewall_extra_rules: ""
+
+cluster_firewall_tcp_ports: "{{ [cluster_nomad_http_port, 4647, 4648, 8300, 8301] + cluster_firewall_cluster_only_ports }}"
+# ports of jobs that are published on the host (host network, or bridge network through nat) but only for the cluster; the nat case does not
+# pass the input chain, it is dropped in a forward chain for everything that does not come from the cluster or the container bridges
+cluster_firewall_cluster_only_ports: "{{ [cluster_traefik_metrics_port] if (cluster_traefik_metrics | bool and inventory_hostname in groups['cluster_ingress'] | default([])) else [] }}"
+cluster_firewall_udp_ports: [4648, 8301]
+cluster_firewall_public_tcp_ports: "{{ [80, 443] if inventory_hostname in groups['cluster_ingress'] | default([]) else [] }}"

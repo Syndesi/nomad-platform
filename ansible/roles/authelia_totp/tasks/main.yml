@@ -1,0 +1,54 @@
+---
+- name: Directory for the registrations on the controller (git-ignored, root of the repo only)
+  ansible.builtin.file:
+    path: "{{ authelia_totp_out_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# The allocation may still be starting right after `nomad job run`: the job waited for a healthy deployment, but be patient anyway
+- name: Register the TOTP secret of the user in authelia
+  ansible.builtin.command:
+    argv:
+      - nomad
+      - alloc
+      - exec
+      - -job
+      - -task
+      - authelia
+      - authelia
+      - authelia
+      - storage
+      - user
+      - totp
+      - generate
+      - "{{ item }}"
+      - --secret
+      - "{{ authelia_totp_seeds[item] }}"
+      - --issuer
+      - "{{ authelia_totp_issuer }}"
+      - --force
+      - --config
+      - /config/configuration.yml
+  environment: "{{ authelia_totp_env }}"
+  loop: "{{ authelia_totp_users }}"
+  register: authelia_totp_result
+  retries: 10
+  delay: 3
+  until: authelia_totp_result.rc == 0
+  no_log: true
+  changed_when: false
+
+- name: Write the registration to the cluster repo (not committed)
+  ansible.builtin.copy:
+    content: "{{ item.stdout }}\n"
+    dest: "{{ authelia_totp_out_dir }}/totp-{{ item.item }}.txt"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  loop: "{{ authelia_totp_result.results }}"
+  loop_control:
+    label: "totp-{{ item.item }}.txt"
+  no_log: true

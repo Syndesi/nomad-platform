@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+users:
+{% for name, user in authelia_users.items() %}
+  {{ name }}:
+    disabled: {{ user.disabled | default(false) | lower }}
+    displayname: '{{ user.displayname }}'
+    password: '{{ authelia_password_hashes[name] }}'
+    email: '{{ user.email }}'
+    groups:
+{% for g in user.groups %}
+      - '{{ g }}'
+{% endfor %}
+{% endfor %}

@@ -1,0 +1,82 @@
+---
+- name: "{{ hashi_agent_name }}: check the built binary exists on the controller"
+  ansible.builtin.stat:
+    path: "{{ hashi_agent_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: hashi_agent_artifact_stat
+
+- name: "{{ hashi_agent_name }}: fail early if it is missing"
+  ansible.builtin.assert:
+    that: hashi_agent_artifact_stat.stat.exists
+    fail_msg: >-
+      {{ hashi_agent_artifact }} not found (os={{ ansible_facts['distribution'] }},
+      arch={{ ansible_facts['architecture'] }}). Run `task build` first.
+    quiet: true
+
+# copy writes a temp file and renames it, so replacing a running binary works (no "text file busy").
+# Upgrade = change the version; the new binary replaces the old one. Nothing is (re)started here:
+# the config roles call apply.yml once the config is in place, and restart if `restart_pending` says so.
+- name: "{{ hashi_agent_name }}: install binary"
+  ansible.builtin.copy:
+    src: "{{ hashi_agent_artifact }}"
+    dest: "{{ hashi_agent_bin_dir }}/{{ hashi_agent_name }}"
+    owner: root
+    group: root
+    mode: "0755"
+  register: hashi_agent_bin
+
+- name: "{{ hashi_agent_name }}: create the config fragment directory"
+  ansible.builtin.file:
+    path: "{{ hashi_agent_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "{{ hashi_agent_name }}: fail if the init system is unsupported"
+  ansible.builtin.assert:
+    that: ansible_facts['service_mgr'] in ['systemd', 'openrc']
+    fail_msg: "unsupported init system '{{ ansible_facts['service_mgr'] }}'"
+    quiet: true
+
+- name: "{{ hashi_agent_name }}: systemd unit"
+  ansible.builtin.template:
+    src: agent.service.j2
+    dest: "/etc/systemd/system/{{ hashi_agent_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_facts['service_mgr'] == 'systemd'
+  register: hashi_agent_unit
+
+- name: "{{ hashi_agent_name }}: OpenRC init script"
+  ansible.builtin.template:
+    src: agent.openrc.j2
+    dest: "/etc/init.d/{{ hashi_agent_name }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: ansible_facts['service_mgr'] == 'openrc'
+  register: hashi_agent_rc
+
+- name: "{{ hashi_agent_name }}: reload systemd"
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: hashi_agent_unit is changed
+
+- name: "{{ hashi_agent_name }}: remember that a restart is due"
+  ansible.builtin.set_fact:
+    hashi_agent_restart_pending: "{{ (hashi_agent_restart_pending | default([]) + [hashi_agent_name]) | unique }}"
+  when: hashi_agent_bin is changed or hashi_agent_unit is changed or hashi_agent_rc is changed
+
+- name: "{{ hashi_agent_name }}: check the binary is callable from PATH"
+  ansible.builtin.command: "{{ hashi_agent_name }} version"
+  register: hashi_agent_version_out
+  changed_when: false
+
+- name: "{{ hashi_agent_name }}: report"
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} ({{ ansible_facts['distribution'] }}, {{ ansible_facts['service_mgr'] }}):
+      {{ hashi_agent_version_out.stdout_lines | first }}

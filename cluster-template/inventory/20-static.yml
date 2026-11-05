@@ -1,0 +1,25 @@
+---
+# The machines. OS family: alpine | ubuntu. Cluster roles: cluster_servers (nomad + consul servers), cluster_clients
+# (nomad clients, docker), cluster_ingress (may run traefik). A node can have several roles.
+#
+# Single VPS (all roles on one node). Set cluster_interface in inventory/host_vars/<node>.yml, see README.md ("Cluster network").
+#
+#    ubuntu:
+#      hosts:
+#        vps1:
+#          ansible_host: 203.0.113.10
+#    cluster_servers: {hosts: {vps1: {}}}
+#    cluster_clients: {hosts: {vps1: {}}}
+#    cluster_ingress: {hosts: {vps1: {}}}
+all:
+  children:
+    alpine:
+      hosts: {}
+    ubuntu:
+      hosts: {}
+    cluster_servers:
+      hosts: {}
+    cluster_clients:
+      hosts: {}
+    cluster_ingress:
+      hosts: {}

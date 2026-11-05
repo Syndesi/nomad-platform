@@ -1,0 +1,125 @@
+---
+# *.consul resolves on the node itself AND inside docker containers (nomad tasks).
+#   ubuntu: systemd-resolved forwards ~consul to the local consul dns port and also listens on docker0
+#   alpine: dnsmasq forwards consul to the local dns port, everything else upstream, listens on docker0
+# docker gets `dns: [docker0 ip]` on both. Pattern taken from the previous deployments.
+- name: Docker config directory
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    mode: "0755"
+
+- name: Docker daemon dns
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: "{{ ({'dns': [cluster_dns_docker_bridge_ip]} | combine(cluster_docker_daemon_extra, recursive=True)) | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  register: cluster_dns_docker
+
+- name: Ubuntu - systemd-resolved
+  when: ansible_facts['os_family'] == 'Debian'
+  block:
+    - name: resolved drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: "0755"
+
+    # one file (each file is a round trip to the node): consul zone + the extra listener on docker0
+    - name: consul + docker0 drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/cluster.conf
+        content: |
+          [Resolve]
+          DNS=127.0.0.1:{{ cluster_dns_consul_port }}
+          DNSSEC=no
+          Domains=~consul.
+          DNSStubListener=yes
+          DNSStubListenerExtra={{ cluster_dns_docker_bridge_ip }}
+        owner: root
+        group: root
+        mode: "0644"
+      register: cluster_dns_resolved
+
+    - name: Restart systemd-resolved
+      ansible.builtin.service:
+        name: systemd-resolved
+        state: restarted
+      when: cluster_dns_resolved.changed
+
+- name: Alpine - dnsmasq
+  when: ansible_facts['os_family'] == 'Alpine'
+  block:
+    - name: dnsmasq reads /etc/dnsmasq.d
+      ansible.builtin.lineinfile:
+        path: /etc/dnsmasq.conf
+        regexp: '^#?conf-dir=/etc/dnsmasq.d'
+        line: "conf-dir=/etc/dnsmasq.d/,*.conf"
+        create: true
+        mode: "0644"
+      register: cluster_dns_conf_dir
+
+    - name: dnsmasq drop-in
+      ansible.builtin.copy:
+        dest: /etc/dnsmasq.d/cluster.conf
+        content: |
+          server=/consul/127.0.0.1#{{ cluster_dns_consul_port }}
+          no-resolv
+          {% for u in cluster_dns_upstreams %}
+          server={{ u }}
+          {% endfor %}
+          # host + docker0 (docker0 may appear after dnsmasq started)
+          listen-address=127.0.0.1,{{ cluster_dns_docker_bridge_ip }}
+          bind-dynamic
+        owner: root
+        group: root
+        mode: "0644"
+      register: cluster_dns_dnsmasq
+
+    # udhcpc must stop overwriting resolv.conf, otherwise the dhcp lease points the node past dnsmasq
+    - name: udhcpc leaves resolv.conf alone
+      ansible.builtin.lineinfile:
+        path: /etc/udhcpc/udhcpc.conf
+        regexp: '^#?\s*RESOLV_CONF='
+        line: "RESOLV_CONF=no"
+        create: true
+        mode: "0644"
+
+    # the alpine cloud image uses dhcpcd: it rewrites resolv.conf on every boot and lease renewal
+    - name: dhcpcd leaves resolv.conf alone
+      ansible.builtin.lineinfile:
+        path: /etc/dhcpcd.conf
+        regexp: '^#?\s*nohook\s+resolv\.conf'
+        line: "nohook resolv.conf"
+        create: true
+        mode: "0644"
+      register: cluster_dns_dhcpcd
+
+    # a running dhcpcd only reads its config at start: without this it overwrites resolv.conf at the next lease renewal
+    - name: dhcpcd restarts to read it (same lease, the address stays)
+      ansible.builtin.service:
+        name: dhcpcd
+        state: restarted
+      when: cluster_dns_dhcpcd is changed
+
+    - name: resolv.conf points at the local dnsmasq
+      ansible.builtin.copy:
+        dest: /etc/resolv.conf
+        content: |
+          search {{ cluster_node_domain }}
+          nameserver 127.0.0.1
+        mode: "0644"
+
+    - name: dnsmasq enabled and running
+      ansible.builtin.service:
+        name: dnsmasq
+        enabled: true
+        state: "{{ 'restarted' if (cluster_dns_dnsmasq.changed or cluster_dns_conf_dir.changed) else 'started' }}"
+
+- name: Restart docker so containers get the new resolver
+  ansible.builtin.service:
+    name: docker
+    state: restarted
+  when: cluster_dns_docker.changed

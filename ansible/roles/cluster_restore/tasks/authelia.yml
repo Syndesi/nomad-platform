@@ -1,0 +1,64 @@
+---
+# Authelia's folder (sqlite: second factors, devices, bans) from the backup, onto the node it belongs to. Before the authelia job starts.
+# A backup without it (or a node without authelia) is not an error: the deploy registers the TOTP seeds again, only the device list is lost.
+- name: The backup has the authelia folder of this node
+  ansible.builtin.stat:
+    path: "{{ cluster_restore_dir }}/authelia-{{ inventory_hostname }}.tar.age"
+  delegate_to: localhost
+  become: false
+  register: cluster_restore_authelia_file
+
+- name: Say what is not restored
+  ansible.builtin.debug:
+    msg: "no authelia folder for {{ inventory_hostname }} in the backup: the second factors are registered again from the seeds"
+  when: not cluster_restore_authelia_file.stat.exists
+
+- name: Authelia folder
+  when: cluster_restore_authelia_file.stat.exists
+  block:
+    - name: Directory on the node (tmpfs, root only)
+      ansible.builtin.file:
+        path: "{{ cluster_restore_node_dir }}"
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    - name: Decrypt on the controller (tmpfs)
+      ansible.builtin.shell: >-
+        set -o pipefail; umask 077;
+        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/authelia-' ~ inventory_hostname ~ '.tar.age') | quote }}
+        > {{ (cluster_run_dir ~ '/restore-authelia-' ~ inventory_hostname ~ '.tar') | quote }}
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Copy to the node
+      ansible.builtin.copy:
+        src: "{{ cluster_run_dir }}/restore-authelia-{{ inventory_hostname }}.tar"
+        dest: "{{ cluster_restore_node_dir }}/authelia.tar"
+        mode: "0600"
+        owner: root
+        group: root
+
+    - name: Unpack into the authelia folder
+      ansible.builtin.unarchive:
+        src: "{{ cluster_restore_node_dir }}/authelia.tar"
+        dest: "{{ cluster_authelia_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+  always:
+    - name: Remove the tar from the node
+      ansible.builtin.file:
+        path: "{{ cluster_restore_node_dir }}"
+        state: absent
+
+    - name: Remove the clear-text tar from the controller
+      ansible.builtin.file:
+        path: "{{ cluster_run_dir }}/restore-authelia-{{ inventory_hostname }}.tar"
+        state: absent
+      delegate_to: localhost
+      become: false

@@ -1,0 +1,6 @@
+# tofu working dirs (the plugin dir of the roots lives in the cluster repos' state/)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+.ansible/

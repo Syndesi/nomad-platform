@@ -1,0 +1,34 @@
+# {{ ansible_managed }}
+node_name = "{{ inventory_hostname }}"
+node_id = "{{ consul_node_id }}"
+datacenter = "{{ cluster_datacenter }}"
+data_dir = "{{ consul_data_dir }}"
+log_level = "INFO"
+
+bind_addr = "{{ consul_ip }}"
+advertise_addr = "{{ consul_ip }}"
+# apis only on the node itself; the outside world goes through traefik + authelia
+client_addr = "{{ consul_client_addr }}"
+
+encrypt = "{{ cluster_consul_gossip_key }}"
+# every node lists the servers, so any new node can join with just this file
+retry_join = {{ cluster_servers_addrs | to_json }}
+
+ports {
+  http = -1
+  https = {{ cluster_consul_https_port }}
+  # envoy sidecars (consul connect) fetch their config from the local agent over grpc/tls
+  grpc = -1
+  grpc_tls = 8503
+}
+
+{% if consul_is_server %}
+server = true
+bootstrap_expect = {{ groups['cluster_servers'] | length }}
+ui_config {
+  enabled = true
+}
+connect {
+  enabled = true
+}
+{% endif %}

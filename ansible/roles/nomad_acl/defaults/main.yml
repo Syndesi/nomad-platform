@@ -1,0 +1,2 @@
+---
+nomad_acl_flag: /var/lib/nomad/.acl-bootstrap-done

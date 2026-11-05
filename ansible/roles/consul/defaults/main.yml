@@ -1,0 +1,19 @@
+---
+consul_version: "{{ lookup('ansible.builtin.env', 'CONSUL_VERSION') }}"
+consul_config_dir: /etc/consul.d
+consul_data_dir: /var/lib/consul
+consul_is_server: "{{ inventory_hostname in groups['cluster_servers'] | default([]) }}"
+consul_ip: "{{ cluster_ip }}"
+# the local http(s) api: loopback, plus the cluster address on the ingress node when traefik runs in its own network namespace
+consul_client_addr: "127.0.0.1{{ (' ' ~ cluster_ip) if (cluster_traefik_wireguard and inventory_hostname in groups['cluster_ingress'] | default([])) else '' }}"
+
+# Token the agent itself uses (node identity, minted by tofu-consul, read from the encrypted state).
+# Empty until tofu-consul ran; the servers then run the `config` tasks again.
+consul_agent_token: "{{ (cluster_consul_out.agent_tokens | default({}))[inventory_hostname] | default('') }}"
+
+# Token the agent answers dns queries with (policy dns: read nodes and services). The anonymous token has no rights.
+consul_dns_token: "{{ (cluster_consul_out.service_tokens | default({}))['dns'] | default('') }}"
+
+# Fixed node id (derived from the cluster secret and the node name): a reinstalled node keeps its
+# identity. A random id on a reinstall is refused by the servers as "node name registered with a different id".
+consul_node_id: "{{ (cluster_name ~ ':' ~ inventory_hostname ~ ':' ~ cluster_consul_gossip_key) | to_uuid }}"

@@ -1,0 +1,10 @@
+---
+# Restores one raft snapshot (consul or nomad) from a backup of `task backup` into a cluster that has just been built.
+# Input: cluster_restore_product (consul|nomad), cluster_restore_dir (the backup directory as the controller sees it).
+# Runs on the first server, as root. site.yml calls it twice, at the two points where the product is up and tofu has not yet
+# created its objects, so the states from the backup (which `task restore` puts in place) match the restored database.
+
+# the age identity that decrypts the backup (inside the tools container)
+cluster_restore_age_key: "{{ lookup('ansible.builtin.env', 'SOPS_AGE_KEY_FILE') | default('/age/keys.txt', true) }}"
+# tmpfs on the node (alpine and ubuntu: /run): the snapshot holds every secret of the cluster and never touches a disk there
+cluster_restore_node_dir: /run/cluster-restore

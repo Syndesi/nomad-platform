@@ -1,0 +1,79 @@
+---
+# How the ansible user becomes root: passwordless (the bootstrap script's default) or with a password.
+# ansible_become_password defined (inventory/group_vars/all/become.sops.yml, `task become:password`) = password mode: the node
+# gets a password hash for the user (made on the controller, fixed salt, so a second run changes nothing) and sudo / doas stop
+# being passwordless. Not defined = passwordless. Going back from password mode to passwordless needs the bootstrap script on the
+# node (or console access): ansible itself cannot become root there without the password any more.
+# Ubuntu 26.04 ships sudo-rs as `sudo`: its password prompt is wrapped ("[sudo: <prompt>] Password:"), which ansible's sudo
+# plugin does not recognise (it matches the start of a line), so every task would time out. The classic sudo is installed beside
+# it (package sudo, /usr/bin/sudo.ws): select that one before the node asks for a password.
+- name: Classic sudo present? (ubuntu)
+  ansible.builtin.stat:
+    path: /usr/bin/sudo.ws
+  register: cluster_ssh_sudo_ws
+  when:
+    - ansible_facts['os_family'] == 'Debian'
+    - ansible_become_password is defined
+
+- name: Classic sudo is the sudo (sudo-rs prompts break ansible's password handling)
+  community.general.alternatives:
+    name: sudo # visudo follows (secondary link)
+    path: /usr/bin/sudo.ws
+  when:
+    - ansible_facts['os_family'] == 'Debian'
+    - ansible_become_password is defined
+    - cluster_ssh_sudo_ws.stat.exists
+
+- name: Hash of the password (made on the controller, deterministic salt)
+  ansible.builtin.command: openssl passwd -6 -salt {{ (cluster_name ~ inventory_hostname) | hash('sha256') | truncate(16, True, '') }} -stdin
+  args:
+    stdin: "{{ ansible_become_password }}"
+  delegate_to: localhost
+  become: false
+  register: cluster_ssh_password_hash
+  changed_when: false
+  no_log: true
+  when: ansible_become_password is defined
+
+- name: Hash the node has now
+  ansible.builtin.shell: "set -o pipefail; getent shadow {{ cluster_ansible_user }} | cut -d: -f2"
+  args:
+    executable: /bin/sh
+  register: cluster_ssh_password_current
+  changed_when: false
+  no_log: true
+  when: ansible_become_password is defined
+
+- name: Password of the ansible user (chpasswd -e)
+  ansible.builtin.command: chpasswd -e
+  args:
+    stdin: "{{ cluster_ansible_user }}:{{ cluster_ssh_password_hash.stdout }}"
+  no_log: true
+  changed_when: true
+  when:
+    - ansible_become_password is defined
+    - cluster_ssh_password_hash.stdout != cluster_ssh_password_current.stdout
+
+- name: sudo (ubuntu)
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/10-cluster-{{ cluster_ansible_user }}"
+    content: "{{ cluster_ansible_user }} ALL=(ALL) {{ 'ALL' if ansible_become_password is defined else 'NOPASSWD:ALL' }}\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: doas rules file (alpine, as the bootstrap script chose it)
+  ansible.builtin.stat:
+    path: /etc/doas.d
+  register: cluster_ssh_doas_dir
+  when: ansible_facts['os_family'] == 'Alpine'
+
+- name: doas (alpine)
+  ansible.builtin.lineinfile:
+    path: "{{ '/etc/doas.d/10-cluster-' ~ cluster_ansible_user ~ '.conf' if cluster_ssh_doas_dir.stat.exists else '/etc/doas.conf' }}"
+    regexp: "^permit (nopass )?{{ cluster_ansible_user }}$"
+    line: "permit {{ '' if ansible_become_password is defined else 'nopass ' }}{{ cluster_ansible_user }}"
+    mode: "0400"
+  when: ansible_facts['os_family'] == 'Alpine'

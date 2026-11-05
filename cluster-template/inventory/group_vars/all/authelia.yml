@@ -1,0 +1,20 @@
+---
+# Authelia users and access rules, see base/docs/contract.md. The passwords are not here: `task authelia:user -- <name>`
+# asks for one and stores its hash sops-encrypted (authelia.sops.yml); the TOTP seed is generated alongside.
+authelia_users:
+  admin:
+    displayname: Admin
+    email: admin@example.org
+    groups: [admin]
+
+authelia_access_rules:
+  # Every rule is two_factor (site.yml refuses anything else). The *-cli names are the uplink of the local proxy (`task proxy:up`).
+  - domain: ["nomad.{{ cluster_domain }}", "nomad-cli.{{ cluster_domain }}"]
+    policy: two_factor
+    subject: ["group:admin"]
+  - domain: ["consul.{{ cluster_domain }}", "consul-cli.{{ cluster_domain }}"]
+    policy: two_factor
+    subject: ["group:admin"]
+  - domain: "traefik.{{ cluster_domain }}"
+    policy: two_factor
+    subject: ["group:admin"]

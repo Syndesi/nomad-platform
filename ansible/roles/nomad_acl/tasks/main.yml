@@ -1,0 +1,39 @@
+---
+# The one imperative nomad acl step: `nomad acl bootstrap` with the pre-generated management
+# token (works once per cluster; a flag file on the server keeps it from running again).
+# The management token is the pre-generated one (sops), so there is nothing to capture.
+# Policies, tokens and variables are tofu's job afterwards (tofu-nomad), the jobs are run by role cluster_jobs.
+- name: Nomad has a leader
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ cluster_nomad_http_port }}/v1/status/leader"
+    ca_path: "{{ cluster_tls_dir }}/ca.pem"
+    return_content: true
+  register: nomad_acl_leader
+  until: nomad_acl_leader.status | default(0) == 200 and (nomad_acl_leader.content | trim) not in ['', '""']
+  retries: 60
+  delay: 1
+  changed_when: false
+
+- name: Has the ACL bootstrap run already?
+  ansible.builtin.stat:
+    path: "{{ nomad_acl_flag }}"
+  register: nomad_acl_done
+
+- name: Bootstrap with the pre-generated management token
+  when: not nomad_acl_done.stat.exists
+  block:
+    - name: nomad acl bootstrap
+      ansible.builtin.command: nomad acl bootstrap -json -
+      environment:
+        NOMAD_ADDR: "https://127.0.0.1:{{ cluster_nomad_http_port }}"
+        NOMAD_CACERT: "{{ cluster_tls_dir }}/ca.pem"
+      args:
+        stdin: "{{ cluster_nomad_management_token }}"
+      no_log: true
+      changed_when: true
+
+    - name: Write the flag
+      ansible.builtin.copy:
+        content: "done {{ now(utc=true).isoformat() }}\n"
+        dest: "{{ nomad_acl_flag }}"
+        mode: "0600"

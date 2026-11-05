@@ -1,0 +1,30 @@
+---
+# Installs one custom-built HashiCorp binary (nomad or consul) plus an OS-native service
+# definition (systemd unit or OpenRC init script). It writes NO daemon configuration: the
+# agent is started with a config *directory* that the consul / nomad roles fill with fragments.
+# It does not start the daemon either: roles consul / nomad include apply.yml after writing config.
+
+# Required: hashi_agent_name (nomad|consul), hashi_agent_version
+hashi_agent_description: "{{ hashi_agent_name | capitalize }} agent"
+
+# Where `task build` put the binaries (a cache outside the repos, mounted read-only into the tools container).
+hashi_agent_artifacts_dir: /artifacts
+hashi_agent_bin_dir: /usr/local/bin
+hashi_agent_config_dir: "/etc/{{ hashi_agent_name }}.d"
+
+# Everything after the binary. Config dir flag differs: nomad `-config <dir>`, consul `-config-dir <dir>`.
+hashi_agent_args: "agent -config-dir {{ hashi_agent_config_dir }}"
+
+# Extra raw lines for the [Service] section of the systemd unit.
+hashi_agent_systemd_service_extra: []
+
+# OpenRC (Alpine) agent log files; supervise-daemon restarts the agent after this many seconds.
+hashi_agent_openrc_log: "/var/log/{{ hashi_agent_name }}.log"
+hashi_agent_restart_delay: 10
+# OpenRC `rc_ulimit` (the counterpart of LimitNOFILE & co. in the systemd unit); "" = the system default.
+hashi_agent_openrc_ulimit: ""
+
+# Derived: how the build step names its output (<product>-<version>-<variant>-<arch>).
+hashi_agent_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_facts['architecture'], 'unsupported') }}"
+hashi_agent_variant: "{{ {'Alpine': 'alpine', 'Ubuntu': 'ubuntu'}.get(ansible_facts['distribution'], 'unsupported') }}"
+hashi_agent_artifact: "{{ hashi_agent_artifacts_dir }}/{{ hashi_agent_name }}-{{ hashi_agent_version }}-{{ hashi_agent_variant }}-{{ hashi_agent_arch }}"

@@ -1,0 +1,425 @@
+---
+# Full cluster deploy, and (with --limit) the deploy of a single node. Every step is idempotent:
+#   1. hosts ready, facts (once), packages, time sync, docker + cni, dns, certificates (key + CSR on the node, signed here)
+#   2. consul servers (initial_management token from the sops secrets, no acl bootstrap race)
+#   3. tofu-consul: acl policies, one agent token per node, service tokens
+#   4. consul servers pick up their agent token (restart only if the config changed), consul clients join
+#   5. nomad servers (+ client on the same node, with its consul token), `nomad acl bootstrap` (once)
+#   6. nomad clients
+#   7. tofu-nomad: workload identity (consul auth method, needs a running nomad), nomad acl policies + tokens, job variables
+#   8. the default jobs (authelia, traefik), run with `nomad job run -var-file`
+# With -e cluster_restore_dir=<backup> (task restore) the cluster is not started empty: the consul snapshot is restored right after the consul
+# servers are up and the nomad snapshot right after the nomad acl bootstrap, both BEFORE the tofu stages, so the tokens in the states
+# (which come from the same backup) are the ones in the restored databases.
+# What needs a running cluster and cannot be declared (initial_management, nomad acl bootstrap) stays in
+# ansible; the objects inside the cluster are tofu's (tofu-consul, tofu-nomad). Tokens are outputs of the
+# client-side encrypted tofu states, read into facts on localhost: nothing secret is written to a disk.
+#
+# One node only (reinstall, new node): `task node -- <name>` = --limit <name>,localhost. The plays on
+# localhost (tokens, tofu stages) are part of the limit, so a new node gets its consul agent token.
+# Pre-requisites: `task age:init`, `task pki:ca`, `task secrets:init`, `task build`, and an inventory (the cluster repo's).
+
+- name: Controller ssh client settings
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Keys for the ssh login exist (task ssh:init)
+      ansible.builtin.assert:
+        that:
+          - cluster_ssh_key_file is file
+          - (cluster_ssh_key_file ~ '.pub') is file
+        fail_msg: "No ssh key for the nodes yet: run `task ssh:init` and bootstrap the nodes (README)."
+        quiet: true
+
+    # the automation key never has a passphrase: nothing could type it in a CI run or a maintenance cron
+    - name: Is the automation key readable without a passphrase?
+      ansible.builtin.command: ssh-keygen -y -P '' -f {{ cluster_ssh_key_file }}
+      changed_when: false
+      failed_when: false
+      register: cluster_ssh_key_plain
+      no_log: true
+
+    - name: ... it must be
+      ansible.builtin.assert:
+        that: cluster_ssh_key_plain.rc == 0
+        fail_msg: "{{ cluster_ssh_key_file }} is protected by a passphrase or is not a private key. The automation key must not have a passphrase (task ssh:init creates one)."
+        quiet: true
+
+    - name: The key's algorithm is one the nodes' sshd and the client config accept
+      ansible.builtin.assert:
+        that:
+          - cluster_ssh_key_type in cluster_ssh_pubkey_algorithms or (cluster_ssh_key_type == 'ssh-rsa' and (cluster_ssh_pubkey_algorithms | select('match', 'rsa-sha2-') | list | length) > 0)
+        fail_msg: >-
+          The ssh key {{ cluster_ssh_key_file }} is of type {{ cluster_ssh_key_type }}, but cluster_ssh_pubkey_algorithms is
+          {{ cluster_ssh_pubkey_algorithms }}. Use a key of an allowed type (task ssh:init -- <key>) or extend the list
+          (sshd and client config both follow it).
+        quiet: true
+      vars:
+        cluster_ssh_key_type: "{{ (lookup('ansible.builtin.file', cluster_ssh_key_file ~ '.pub') | trim).split(' ')[0] }}"
+
+    - name: Wireguard for traefik is fully configured
+      ansible.builtin.assert:
+        that:
+          - cluster_wireguard_image | length > 0
+          - cluster_traefik_wireguard_conf is defined
+        fail_msg: "cluster_traefik_wireguard is true: set cluster_wireguard_image and store the wg-quick config with `task wireguard:conf -- <file>`."
+        quiet: true
+      when: cluster_traefik_wireguard | bool
+
+    - name: Directory for the clear-text runtime files (tmpfs) and the known hosts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ cluster_run_dir }}"
+        - "{{ cluster_dir }}/ssh"
+
+    - name: ssh client config
+      ansible.builtin.template:
+        src: "{{ cluster_base_dir }}/ansible/templates/ssh_config.j2"
+        dest: "{{ cluster_ssh_config_file }}"
+        mode: "0600"
+
+- name: Wait for first-boot provisioning
+  hosts: vms
+  gather_facts: false
+  tasks:
+    - name: Wait until the nodes accept the ansible user (cloud-init has run the bootstrap)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.raw: cloud-init status --wait
+      register: cloud_init
+      changed_when: false
+      # rc 2 = finished with recoverable warnings (e.g. Alpine cloud image has no ssh-keygen); rc 1 = real failure
+      failed_when: cloud_init.rc not in [0, 2]
+
+- name: Controller preparation, tokens of an existing cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The cluster repo defines what the platform cannot guess (docs/contract.md)
+      ansible.builtin.assert:
+        that:
+          - cluster_name is defined
+          - cluster_domain is defined
+          - cluster_acme_email is defined
+          - authelia_users is defined
+          - authelia_password_hashes is defined
+          - authelia_users | difference(authelia_password_hashes) | length == 0
+          - authelia_access_rules is defined
+          - groups['cluster_servers'] | default([]) | length > 0
+        fail_msg: "Set cluster_name, cluster_domain, cluster_acme_email, authelia_users and authelia_access_rules in inventory/group_vars/all/, give every authelia user a password (task authelia:user -- <name>) and put a node in cluster_servers."
+        quiet: true
+
+    - name: Secrets and CA are there (sops/age)
+      ansible.builtin.assert:
+        that:
+          - cluster_consul_gossip_key is defined
+          - cluster_ca_key is defined
+        fail_msg: "Run `task age:init`, `task pki:ca` and `task secrets:init` first."
+        quiet: true
+
+    - name: Every access rule asks for the second factor, every user has a TOTP seed
+      ansible.builtin.assert:
+        that:
+          - authelia_access_rules | rejectattr('policy', 'in', ['two_factor', 'deny']) | list | length == 0 or cluster_authelia_allow_weaker_policies | bool
+          - authelia_users | difference((authelia_totp_seeds | default({})).keys() | list) | length == 0
+        fail_msg: >-
+          Every authelia_access_rules entry must have policy two_factor or deny (cluster_authelia_allow_weaker_policies: true allows others), and every
+          user needs a TOTP seed: `task authelia:seed -- <user>` (users set with `task authelia:user` get one). No first factor alone anywhere.
+        quiet: true
+
+    - name: The backup to restore is complete (cluster_restore_dir)
+      ansible.builtin.assert:
+        that:
+          - (cluster_restore_dir ~ '/.complete') is file
+          - (cluster_restore_dir ~ '/consul.snap.age') is file
+          - (cluster_restore_dir ~ '/nomad.snap.age') is file
+        fail_msg: "{{ cluster_restore_dir }} is not a complete backup of `task backup`."
+        quiet: true
+      when: cluster_restore_dir | length > 0
+
+    - name: Tokens that already exist (empty on a fresh deploy)
+      ansible.builtin.include_role:
+        name: tofu_stage
+        tasks_from: outputs
+      vars:
+        tofu_stage_name: "{{ item.name }}"
+        tofu_stage_fact: "{{ item.fact }}"
+      loop:
+        - { name: tofu-consul, fact: tofu_out_consul }
+        - { name: tofu-nomad, fact: tofu_out_nomad }
+      loop_control:
+        label: "{{ item.name }}"
+
+# Facts are gathered here, once, and reused by every later play (distribution, service manager,
+# architecture and the default ipv4 are all the roles use). The full gather is the slow one.
+- name: Node basics - facts, packages, docker, certificates
+  hosts: cluster_servers:cluster_clients
+  become: true
+  gather_facts: false
+  vars:
+    # nc is what the tofu tunnel uses on a server (busybox on alpine); chrony: alpine ships no time sync at all
+    base_packages:
+      Debian: [ca-certificates, curl, htop, openssl, jq, netcat-openbsd, nftables]
+      Alpine: [ca-certificates, curl, htop, openssl, jq, chrony, logrotate, nftables]
+    # nodes that run workloads: docker (nomad docker driver), the dns forwarder, cni plugins + iptables for bridge networking
+    client_packages:
+      Debian: [docker.io, containernetworking-plugins, iptables]
+      Alpine: [docker, dnsmasq, cni-plugins, iptables]
+  tasks:
+    - name: Facts
+      ansible.builtin.setup:
+        gather_subset: [min, network]
+
+    # the nodes join the servers by their cluster address; `task node -- <host>` limits the play to one node
+    - name: Facts of the servers outside this run
+      ansible.builtin.setup:
+        gather_subset: [min, network]
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['cluster_servers'] | default([]) }}"
+      when: hostvars[item].ansible_facts['interfaces'] is not defined
+      run_once: true
+
+    - name: The cluster interface exists and has an ipv4 address (cluster_interface)
+      ansible.builtin.assert:
+        that:
+          - ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')] is defined
+          - ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')]['ipv4'] is defined
+        fail_msg: >-
+          Interface '{{ cluster_interface_effective }}' of {{ inventory_hostname }} is missing or has no ipv4 address
+          (cluster_interface in host_vars/group_vars; interfaces here: {{ ansible_facts['interfaces'] | join(', ') }}).
+        success_msg: "{{ inventory_hostname }}: cluster address {{ cluster_ip }} on {{ cluster_interface_effective }}"
+        quiet: false
+
+    - name: Access - authorized keys, hardened sshd
+      ansible.builtin.include_role:
+        name: cluster_ssh
+
+    - name: Packages and package index (apt)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        name: "{{ base_packages['Debian'] + (client_packages['Debian'] if inventory_hostname in groups['cluster_clients'] else []) }}"
+        state: present
+      when: ansible_facts["os_family"] == "Debian"
+
+    - name: Packages and package index (apk)
+      community.general.apk:
+        update_cache: true
+        name: "{{ base_packages['Alpine'] + (client_packages['Alpine'] if inventory_hostname in groups['cluster_clients'] else []) }}"
+        state: present
+      when: ansible_facts["os_family"] == "Alpine"
+
+    # Certificates, gossip, acl tokens and authelia (refuses to start when the clock is off by more
+    # than 3 s) all need a correct clock. The daemon starts here, the wait is at the end of this play.
+    - name: Time sync (alpine)
+      ansible.builtin.service:
+        name: chronyd
+        enabled: true
+        state: started
+      when: ansible_facts["os_family"] == "Alpine"
+
+    - name: Log retention (one file per day, cluster_log_retention_days)
+      ansible.builtin.include_role:
+        name: cluster_logs
+
+    - name: Docker (nomad docker driver)
+      ansible.builtin.include_role:
+        name: docker_engine
+      when: inventory_hostname in groups['cluster_clients']
+
+    - name: Bridge networking for consul connect sidecars
+      ansible.builtin.include_role:
+        name: cluster_cni
+      when: inventory_hostname in groups['cluster_clients']
+
+    - name: Consul as system dns (host + docker containers)
+      ansible.builtin.include_role:
+        name: cluster_dns
+      when: inventory_hostname in groups['cluster_clients']
+
+    - name: Host firewall (nftables)
+      ansible.builtin.include_role:
+        name: cluster_firewall
+        tasks_from: "{{ 'main' if cluster_firewall_enabled | bool else 'disable' }}"
+
+    - name: Certificates (key + CSR on the node, signed here)
+      ansible.builtin.include_role:
+        name: cluster_tls
+
+    - name: Clock is synchronized (alpine)
+      ansible.builtin.command: chronyc waitsync 60 0.5 0 1
+      changed_when: false
+      when: ansible_facts["os_family"] == "Alpine"
+
+    - name: Clock is synchronized (ubuntu)
+      ansible.builtin.command: timedatectl show -p NTPSynchronized --value
+      register: cluster_clock
+      until: cluster_clock.stdout | trim == 'yes'
+      retries: 60
+      delay: 1
+      changed_when: false
+      when: ansible_facts["os_family"] == "Debian"
+
+- name: Consul servers
+  hosts: cluster_servers
+  become: true
+  serial: 1
+  gather_facts: false
+  roles:
+    - consul
+
+- name: Restore the consul snapshot (task restore)
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Consul snapshot
+      ansible.builtin.include_role:
+        name: cluster_restore
+      vars:
+        cluster_restore_product: consul
+      when: cluster_restore_dir | length > 0
+
+- name: Consul acl objects (tofu-consul)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Policies, agent and service tokens (tofu)
+      ansible.builtin.include_role:
+        name: tofu_stage
+      vars:
+        tofu_stage_name: tofu-consul
+        tofu_stage_fact: tofu_out_consul
+        tofu_stage_vars:
+          consul_address: "127.0.0.1:{{ tofu_stage_consul_port }}"
+          ca_file: "{{ cluster_ca_cert }}"
+          consul_token: "{{ cluster_consul_management_token }}"
+          datacenter: "{{ cluster_datacenter }}"
+          nodes: "{{ (groups['cluster_servers'] + groups['cluster_clients']) | unique }}"
+
+# The agent tokens exist now: servers write them into their config (a restart only if it changed),
+# clients join with theirs.
+- name: Consul agent tokens on the servers
+  hosts: cluster_servers
+  become: true
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Consul config with the agent token
+      ansible.builtin.include_role:
+        name: consul
+        tasks_from: config
+
+- name: Consul clients
+  hosts: cluster_clients:!cluster_servers
+  become: true
+  gather_facts: false
+  roles:
+    - consul
+
+- name: Nomad servers
+  hosts: cluster_servers
+  become: true
+  serial: 1
+  gather_facts: false
+  roles:
+    - nomad
+
+- name: Nomad acl bootstrap (once)
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  roles:
+    - nomad_acl
+
+- name: Restore the nomad snapshot (task restore)
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Nomad snapshot
+      ansible.builtin.include_role:
+        name: cluster_restore
+      vars:
+        cluster_restore_product: nomad
+      when: cluster_restore_dir | length > 0
+
+# The restore brings back the client nodes of the old cluster as `ready`; nomad only starts their heartbeat timers when a leader is
+# elected, so without this restart their jobs look `running` on nodes that no longer exist. After it the old nodes go down and
+# the jobs are placed on the new clients.
+- name: Nomad servers elect a leader again (task restore)
+  hosts: cluster_servers
+  become: true
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Restart nomad and wait for a leader
+      when: cluster_restore_dir | length > 0
+      block:
+        - name: Restart nomad
+          ansible.builtin.service:
+            name: nomad
+            state: restarted
+
+        - name: Nomad answers and has a leader
+          ansible.builtin.uri:
+            url: "https://127.0.0.1:{{ cluster_nomad_http_port }}/v1/status/leader"
+            ca_path: "{{ cluster_tls_dir }}/ca.pem"
+            return_content: true
+          register: nomad_restore_leader
+          until: nomad_restore_leader.status | default(0) == 200 and (nomad_restore_leader.content | trim) not in ['', '""']
+          retries: 60
+          delay: 2
+          changed_when: false
+
+- name: Restore the authelia folders (task restore)
+  hosts: cluster_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Authelia folder of the backup
+      ansible.builtin.include_role:
+        name: cluster_restore
+        tasks_from: authelia
+      when: cluster_restore_dir | length > 0 and inventory_hostname in cluster_authelia_hosts
+
+- name: Nomad clients
+  hosts: cluster_clients:!cluster_servers
+  become: true
+  gather_facts: false
+  roles:
+    - nomad
+
+- name: Nomad acl objects and job variables (tofu-nomad)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: tofu-nomad
+      ansible.builtin.include_role:
+        name: cluster_jobs
+        tasks_from: objects
+
+- name: Default jobs (authelia, traefik)
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  roles:
+    - cluster_jobs
+
+# The jobs run; authelia has its (persistent) database. Register the second factor of every user from the sops seeds.
+- name: Second factors of the authelia users
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  roles:
+    - authelia_totp

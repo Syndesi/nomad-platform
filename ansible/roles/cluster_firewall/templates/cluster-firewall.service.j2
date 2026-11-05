@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Cluster firewall (nftables table inet {{ cluster_firewall_table }})
+Wants=network-pre.target
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f {{ cluster_firewall_file }}
+ExecReload=/usr/sbin/nft -f {{ cluster_firewall_file }}
+ExecStop=-/usr/sbin/nft delete table inet {{ cluster_firewall_table }}
+
+[Install]
+WantedBy=multi-user.target

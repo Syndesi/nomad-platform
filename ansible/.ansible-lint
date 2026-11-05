@@ -1,0 +1,17 @@
+---
+# Skipped on purpose:
+skip_list:
+  # task names lead with the object ("nomad variable x: write", "job traefik: run"): the run log is
+  # read by humans, and a templated name is what tells loop iterations apart
+  - name[template]
+  # names start with the tool or file they are about (br_netfilter, tofu apply, resolv.conf ...)
+  - name[casing]
+  # probes with pipes only read state (checkend, jq on a nomad json); a failing left side shows as empty output
+  - risky-shell-pipe
+  # the follow-up task must run NOW (cert reload before the next play, docker restart before the first container), not at the end of the play
+  - no-handler
+  # cluster_* is the shared cluster configuration (group_vars), deliberately used by every role
+  - var-naming[no-role-prefix]
+exclude_paths:
+  - inventory/group_vars/all/*.sops.yml
+  - .ansible/

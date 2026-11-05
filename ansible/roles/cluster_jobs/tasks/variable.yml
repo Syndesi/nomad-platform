@@ -1,0 +1,21 @@
+---
+# Input: cluster_jobs_var_path, cluster_jobs_var_items (dict). Writes the nomad variable only
+# when the stored items differ (idempotent, and no needless job restarts).
+- name: "nomad variable {{ cluster_jobs_var_path }}: current value"
+  ansible.builtin.command: "nomad var get -out json {{ cluster_jobs_var_path }}"
+  environment: "{{ cluster_jobs_env }}"
+  register: cluster_jobs_var_current
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: "nomad variable {{ cluster_jobs_var_path }}: write"
+  ansible.builtin.command: "nomad var put -in json -out none -force -"
+  environment: "{{ cluster_jobs_env }}"
+  args:
+    stdin: "{{ {'Path': cluster_jobs_var_path, 'Items': cluster_jobs_var_items} | to_json }}"
+  when: >-
+    cluster_jobs_var_current.rc != 0
+    or (cluster_jobs_var_current.stdout | from_json).Items != cluster_jobs_var_items
+  no_log: true
+  changed_when: true

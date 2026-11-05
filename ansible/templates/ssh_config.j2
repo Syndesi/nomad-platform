@@ -1,0 +1,33 @@
+# {{ ansible_managed }}
+# ssh client settings of the controller (tools container), used by ansible (ansible_ssh_common_args) and by the scripts
+# (CLUSTER_EXEC default). Rendered from the cluster_ssh_* variables, so client and sshd (role cluster_ssh) cannot drift.
+# where each node is: what the inventory says (ansible_host / ansible_port), so the scripts reach a node by its name
+# exactly like ansible does (first match wins in ssh configs: these come before `Host *`)
+{% for h in groups['all'] | difference(['localhost']) | sort %}
+{% if hostvars[h].ansible_host is defined or hostvars[h].ansible_port is defined %}
+Host {{ h }}
+{% if hostvars[h].ansible_host is defined %}
+  HostName {{ hostvars[h].ansible_host }}
+{% endif %}
+{% if hostvars[h].ansible_port is defined %}
+  Port {{ hostvars[h].ansible_port }}
+{% endif %}
+{% endif %}
+{% endfor %}
+
+Host *
+  User {{ cluster_ansible_user }}
+  IdentityFile {{ cluster_ssh_key_file }}
+  IdentitiesOnly yes
+  KexAlgorithms {{ cluster_ssh_kex | join(',') }}
+  Ciphers {{ cluster_ssh_ciphers | join(',') }}
+  HostKeyAlgorithms {{ cluster_ssh_host_key_algorithms | join(',') }}
+  PubkeyAcceptedAlgorithms {{ cluster_ssh_pubkey_algorithms | join(',') }}
+  PasswordAuthentication no
+  # the host keys are public: the cluster repo keeps them (a reinstalled node needs `task ssh:forget -- <node>`)
+  UserKnownHostsFile {{ cluster_dir }}/ssh/known_hosts
+  StrictHostKeyChecking accept-new
+  ServerAliveInterval 30
+{% if cluster_ssh_config_extra %}
+{{ cluster_ssh_config_extra | indent(2, true) }}
+{% endif %}

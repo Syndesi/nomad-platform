@@ -1,0 +1,43 @@
+---
+# Log retention, see defaults/main.yml. The logrotate package comes with the package transaction of site.yml.
+- name: Alpine - logrotate (daily from crond)
+  when: ansible_facts['os_family'] == 'Alpine'
+  block:
+    - name: logrotate rule for the agent logs
+      ansible.builtin.template:
+        src: logrotate.conf.j2
+        dest: /etc/logrotate.d/cluster
+        owner: root
+        group: root
+        mode: "0644"
+
+    # /etc/periodic/daily/logrotate (package) runs from root's crontab through crond
+    - name: crond runs the periodic jobs
+      ansible.builtin.service:
+        name: crond
+        enabled: true
+        state: started
+
+- name: Ubuntu - journald keeps one file per day for the retention
+  when: ansible_facts['os_family'] == 'Debian'
+  block:
+    - name: journald drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: journald retention drop-in
+      ansible.builtin.template:
+        src: journald.conf.j2
+        dest: /etc/systemd/journald.conf.d/10-cluster.conf
+        owner: root
+        group: root
+        mode: "0644"
+      register: cluster_logs_journald
+
+    - name: Restart journald to read it
+      ansible.builtin.service:
+        name: systemd-journald
+        state: restarted
+      when: cluster_logs_journald is changed

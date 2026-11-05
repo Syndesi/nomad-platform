@@ -1,0 +1,14 @@
+# Everything secret is sops/age encrypted (inventory/group_vars/all/*.sops.yml) or lives in tofu state that is
+# client side encrypted (state/), so those files may be committed. What stays out: the private keys.
+secrets/age/*
+!secrets/age/.gitkeep
+secrets/ssh/*
+!secrets/ssh/.gitkeep
+# TOTP registrations of the authelia users (otpauth URI): a second factor in clear text
+secrets/authelia/*
+!secrets/authelia/.gitkeep
+state/*/.terraform/
+.deploy-timing.log
+backups/
+# the local proxy of `task proxy:up`: session cookie of the authelia login
+.proxy/

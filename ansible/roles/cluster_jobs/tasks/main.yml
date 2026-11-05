@@ -1,0 +1,64 @@
+---
+# The default jobs (authelia, traefik), run on the first server with plain `nomad job run -var-file`:
+# the job files in jobs/ are ordinary HCL2 and can be run by hand the same way. Their variables are
+# nomad variables (tofu-nomad), except the ingress key, which was made on this node and goes from
+# the node's tls dir into a nomad variable here.
+- name: Ingress certificate and key (made on this node) as nomad variable
+  when: cluster_acme_ca == 'internal'
+  block:
+    - name: Read the ingress files
+      ansible.builtin.slurp:
+        src: "{{ cluster_tls_dir }}/{{ item }}"
+      loop: [ingress.pem, ingress.key]
+      register: cluster_jobs_ingress
+      no_log: true
+
+    - name: Nomad variable with them
+      ansible.builtin.include_tasks: variable.yml
+      vars:
+        cluster_jobs_var_path: nomad/jobs/traefik/traefik
+        cluster_jobs_var_items:
+          ingress_cert: "{{ cluster_jobs_ingress.results[0].content | b64decode }}"
+          ingress_key: "{{ cluster_jobs_ingress.results[1].content | b64decode }}"
+
+# the wg-quick config (private key inside) from the sops secret; only the wireguard task of the job can read this path
+- name: Wireguard config as nomad variable (task wireguard:conf)
+  ansible.builtin.include_tasks: variable.yml
+  vars:
+    cluster_jobs_var_path: nomad/jobs/traefik/traefik/wireguard
+    cluster_jobs_var_items:
+      conf: "{{ cluster_traefik_wireguard_conf }}"
+  when: cluster_traefik_wireguard | bool
+
+- name: Job directory on the server
+  ansible.builtin.file:
+    path: "{{ cluster_jobs_remote_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Job files on the server
+  ansible.builtin.copy:
+    src: "{{ cluster_jobs_local_dir }}/{{ item.name }}.nomad.hcl"
+    dest: "{{ cluster_jobs_remote_dir }}/{{ item.name }}.nomad.hcl"
+    mode: "0644"
+  loop: "{{ cluster_jobs_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# text templates a job file reads with templatefile() (jobs/<name>/*.tpl), next to the job files
+- name: Template directories of the jobs on the server
+  ansible.builtin.copy:
+    src: "{{ cluster_jobs_local_dir }}/{{ item.name }}/"
+    dest: "{{ cluster_jobs_remote_dir }}/{{ item.name }}/"
+    mode: "0644"
+    directory_mode: "0755"
+  loop: "{{ cluster_jobs_list | selectattr('templates', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Run the jobs
+  ansible.builtin.include_tasks: job.yml
+  loop: "{{ cluster_jobs_list }}"
+  loop_control:
+    loop_var: cluster_jobs_item
+    label: "{{ cluster_jobs_item.name }}"

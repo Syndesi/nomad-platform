@@ -1,0 +1,24 @@
+---
+# Start or restart the daemon after its config has been written.
+# Input: hashi_agent_name, hashi_agent_config_changed (bool, did a config fragment change),
+#        hashi_agent_validate (the daemon's own check of its whole config directory, run before every start).
+# Restart when a config fragment changed or the binary/service definition did (restart_pending),
+# otherwise just make sure it runs. Cert-only changes never come here: those are a reload.
+# A bad fragment must fail here, with the daemon's own message, and not as a restart that never comes
+# back. The running daemon is not touched by this; but the file stays on disk, so fix it before a reboot.
+# Always, not only on change: a bad file left by an earlier failed run is found again.
+- name: "{{ hashi_agent_name }}: validate the config directory"
+  ansible.builtin.command:
+    cmd: "{{ hashi_agent_validate }}"
+  when: hashi_agent_validate is defined
+  changed_when: false
+
+- name: "{{ hashi_agent_name }}: (re)start"
+  ansible.builtin.service:
+    name: "{{ hashi_agent_name }}"
+    state: "{{ 'restarted' if (hashi_agent_config_changed | bool or hashi_agent_name in (hashi_agent_restart_pending | default([]))) else 'started' }}"
+    enabled: true
+
+- name: "{{ hashi_agent_name }}: restart done"
+  ansible.builtin.set_fact:
+    hashi_agent_restart_pending: "{{ (hashi_agent_restart_pending | default([])) | difference([hashi_agent_name]) }}"

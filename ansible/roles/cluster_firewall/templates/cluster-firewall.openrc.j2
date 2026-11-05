@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+# {{ ansible_managed }}
+description="Cluster firewall (nftables table inet {{ cluster_firewall_table }})"
+
+depend() {
+    before net
+}
+
+start() {
+    ebegin "Loading the cluster firewall"
+    /usr/sbin/nft -f {{ cluster_firewall_file }}
+    eend $?
+}
+
+stop() {
+    ebegin "Removing the cluster firewall"
+    /usr/sbin/nft delete table inet {{ cluster_firewall_table }} 2>/dev/null
+    eend 0
+}

@@ -1,0 +1,23 @@
+---
+# cluster_firewall_enabled: false - take the firewall away again (the table is deleted when the service stops)
+- name: Firewall service stopped and disabled
+  ansible.builtin.service:
+    name: cluster-firewall
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Firewall table removed
+  ansible.builtin.command: /usr/sbin/nft delete table inet {{ cluster_firewall_table }}
+  register: cluster_firewall_delete
+  changed_when: cluster_firewall_delete.rc == 0
+  failed_when: false
+
+- name: Firewall files removed
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ cluster_firewall_file }}"
+    - /etc/systemd/system/cluster-firewall.service
+    - /etc/init.d/cluster-firewall

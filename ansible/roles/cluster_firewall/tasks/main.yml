@@ -1,0 +1,66 @@
+---
+# The nft package comes with the package transaction of site.yml. The rules are checked (`nft -c`) before they are written
+# into place, and applied in one transaction, so a mistake in them never leaves the node half open or half closed.
+- name: Firewall directory
+  ansible.builtin.file:
+    path: "{{ cluster_firewall_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Firewall rules (checked with nft -c)
+  ansible.builtin.template:
+    src: firewall.nft.j2
+    dest: "{{ cluster_firewall_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nft -c -f %s
+  register: cluster_firewall_rules
+
+- name: systemd unit (loads the rules at boot)
+  ansible.builtin.template:
+    src: cluster-firewall.service.j2
+    dest: /etc/systemd/system/cluster-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: cluster_firewall_unit
+  when: ansible_facts['service_mgr'] == 'systemd'
+
+- name: OpenRC init script (loads the rules at boot)
+  ansible.builtin.template:
+    src: cluster-firewall.openrc.j2
+    dest: /etc/init.d/cluster-firewall
+    owner: root
+    group: root
+    mode: "0755"
+  when: ansible_facts['service_mgr'] == 'openrc'
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: cluster_firewall_unit is changed
+
+- name: Firewall enabled at boot
+  ansible.builtin.service:
+    name: cluster-firewall
+    enabled: true
+
+- name: Is the table loaded?
+  ansible.builtin.command: /usr/sbin/nft list table inet {{ cluster_firewall_table }}
+  register: cluster_firewall_loaded
+  changed_when: false
+  failed_when: false
+
+# one transaction: the old table is replaced by the new one, there is no moment without rules
+- name: Load the rules (changed, or not loaded yet)
+  ansible.builtin.command: /usr/sbin/nft -f {{ cluster_firewall_file }}
+  changed_when: true
+  when: cluster_firewall_rules is changed or cluster_firewall_loaded.rc != 0
+
+# the service's state is "started" after this (systemd: oneshot with RemainAfterExit, openrc: state only); the rules are in
+# place already, loading them once more is a no-op
+- name: Service started
+  ansible.builtin.service:
+    name: cluster-firewall
+    state: started

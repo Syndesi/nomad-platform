@@ -1,0 +1,3 @@
+---
+# alpine has doas, not sudo (no sudo is installed there); the bootstrap script writes the rule
+ansible_become_method: community.general.doas
