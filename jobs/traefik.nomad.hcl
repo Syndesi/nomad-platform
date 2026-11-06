@@ -1,6 +1,6 @@
 # Traefik: ingress on the nomad server node (client meta traefik=true).
-#  - consul catalog provider: jobs publish routers through service tags (authelia does)
-#  - file provider: nomad / consul / traefik dashboard, all behind the authelia forward-auth
+#  - consul catalog provider: jobs publish routers through service tags (apps do)
+#  - file provider: authelia (portal and forward-auth middleware), nomad / consul / traefik dashboard, all behind the authelia forward-auth
 # Reaches the local consul / nomad over https. No host path is mounted: the cluster CA (public) comes from the nomad
 # variable like the secrets do: the consul token and the CA from nomad/jobs/traefik (tofu-nomad), the ingress cert + key
 # ("internal" mode, made on the ingress node) from nomad/jobs/traefik/traefik (role cluster_jobs).
@@ -24,6 +24,10 @@ variable "consul_port" {
 }
 variable "nomad_port" {
   type = number
+}
+# <cluster address>:<port> of authelia (https), where the forward-auth middleware calls it. The node is the first of cluster_authelia_hosts.
+variable "authelia_addr" {
+  type = string
 }
 variable "wireguard" {
   type    = bool
@@ -282,7 +286,7 @@ EOT
         perms       = "0600"
       }
 
-      # nomad / consul / dashboard behind the authelia forward-auth (the middleware comes from authelia's service tags), TLS options,
+      # authelia, nomad / consul / dashboard behind the authelia forward-auth (the middleware is defined here), TLS options,
       # default certificate (the files of the volume above). Text: traefik/dynamic.yml.tpl
       template {
         data        = file("${var.templates_dir}/dynamic.yml.tpl")
@@ -292,15 +296,16 @@ EOT
 
       # parameters of the templates above (jobs/traefik/*.tpl), read there with {{ env "..." }}
       env {
-        TPL_WIREGUARD    = var.wireguard
-        TPL_DOMAIN       = var.domain
-        TPL_METRICS_PORT = var.metrics_port
-        TPL_CONSUL_PORT  = var.consul_port
-        TPL_NOMAD_PORT   = var.nomad_port
-        TPL_TLS_RESOLVER = var.tls_resolver
-        TPL_ACME_SERVER  = var.acme_server
-        TPL_ACME_EMAIL   = var.acme_email
-        TLS_FINGERPRINT  = var.tls_fingerprint
+        TPL_WIREGUARD     = var.wireguard
+        TPL_DOMAIN        = var.domain
+        TPL_AUTHELIA_ADDR = var.authelia_addr
+        TPL_METRICS_PORT  = var.metrics_port
+        TPL_CONSUL_PORT   = var.consul_port
+        TPL_NOMAD_PORT    = var.nomad_port
+        TPL_TLS_RESOLVER  = var.tls_resolver
+        TPL_ACME_SERVER   = var.acme_server
+        TPL_ACME_EMAIL    = var.acme_email
+        TLS_FINGERPRINT   = var.tls_fingerprint
       }
 
       config {

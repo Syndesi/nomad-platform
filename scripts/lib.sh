@@ -57,3 +57,10 @@ cluster_root() {
   rc=$(jq -r --arg h "$host" '.plays[0].tasks[0].hosts[$h].rc // 1' <<<"$out" 2>/dev/null || echo 1)
   return "${rc:-1}"
 }
+
+# The consul management token for the scripts: the ops token from the state of tofu-consul once the deploy handed over to it, else the bootstrap token
+consul_ops_token() {
+  local t
+  t=$("$BASE/scripts/tofu-enc.sh" tofu-consul output -json service_tokens 2>/dev/null | jq -r '.ops // empty' 2>/dev/null) || t=""
+  if [ -n "$t" ]; then printf '%s\n' "$t"; else "$BASE/scripts/secrets.sh" get cluster_consul_management_token; fi
+}

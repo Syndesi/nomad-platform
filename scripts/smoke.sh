@@ -55,9 +55,16 @@ for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; 
   nd() { cluster_exec "$n" sh -c "$1" 2>&1; }
   res=$(nd 'getent hosts authelia.service.consul >/dev/null && echo consul-ok; grep -qE "^nameserver 127[.]" /etc/resolv.conf && echo local-resolver')
   if [ "$(printf '%s\n' "$res" | sort | tr '\n' ' ')" = "consul-ok local-resolver " ]; then printf 'ok    dns on %s: consul name, local resolver\n' "$n"; else printf 'FAIL  dns on %s (got: %s)\n' "$n" "$(printf '%s' "$res" | tr '\n' ' ' | cut -c1-100)"; fail=1; fi
+  # exactly one dns server per node: one nameserver line in resolv.conf (a dhcp client that rewrites it adds the provider's), and on alpine one
+  # dhcpcd manager (the network stack starts the first one at boot; a second one with an older config rewrites resolv.conf at the next lease renewal)
+  ns=$(nd 'grep -c ^nameserver /etc/resolv.conf' | tail -1)
+  dh=$(nd 'pgrep -f "dhcpcd: .[m]anager" | wc -l' | tail -1)
+  if [ "$ns" = 1 ] && [ "${dh:-0}" -le 1 ] 2>/dev/null; then printf 'ok    one dns server on %s (resolv.conf: 1 nameserver, dhcpcd managers: %s)\n' "$n" "$dh"; else printf 'FAIL  one dns server on %s (nameserver lines: %s, dhcpcd managers: %s)\n' "$n" "$ns" "$dh"; fail=1; fi
   if [ -n "$(nd 'command -v docker')" ]; then
     c=$(cluster_root "$n" "docker run --rm busybox:1.37 nslookup authelia.service.consul 2>&1 | grep -c '^Address: '")
     if [ "${c:-0}" -ge 1 ] 2>/dev/null; then printf 'ok    dns in a container on %s\n' "$n"; else printf 'FAIL  dns in a container on %s (got: %s)\n' "$n" "$c"; fail=1; fi
+    cn=$(cluster_root "$n" "docker run --rm busybox:1.37 grep -c ^nameserver /etc/resolv.conf")
+    if [ "$cn" = 1 ]; then printf 'ok    one dns server in a container on %s\n' "$n"; else printf 'FAIL  one dns server in a container on %s (nameserver lines: %s)\n' "$n" "$cn"; fail=1; fi
   fi
 done
 
@@ -98,7 +105,7 @@ done
 
 # containers: no internet and no public dns by default (*.consul and the node's names work); the network egress (cni/egress) has both.
 # One container of each kind on every client node.
-mt=$("$BASE/scripts/secrets.sh" get cluster_consul_management_token)
+mt=$(consul_ops_token)
 nm=$("$BASE/scripts/secrets.sh" get cluster_nomad_management_token)
 mgmt() { cluster_exec "$server" env "NOMAD_TOKEN=$nm" "CONSUL_HTTP_TOKEN=$mt" sh -lc "$1"; }
 echo "-- container networks (bridge: closed, cni/egress: open) and their dns"
@@ -138,7 +145,7 @@ mgmt "nomad job stop -purge network-test >/dev/null; rm -f /tmp/network.nomad.hc
 
 if [ "${1:-}" = connect ]; then
   echo "-- consul connect (envoy sidecars through the cni bridge)"
-  mt=$("$BASE/scripts/secrets.sh" get cluster_consul_management_token)
+  mt=$(consul_ops_token)
   nm=$("$BASE/scripts/secrets.sh" get cluster_nomad_management_token)
   mgmt() { cluster_exec "$server" env "NOMAD_TOKEN=$nm" "CONSUL_HTTP_TOKEN=$mt" sh -lc "$1"; }
   mgmt "cat > /tmp/connect.nomad.hcl" < "$BASE/tests/connect.nomad.hcl"

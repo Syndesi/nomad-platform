@@ -39,6 +39,14 @@ for people who passed Authelia: a request without a Nomad token gets traefik's f
 nodes), a request with its own `X-Nomad-Token` is passed on unchanged. The Consul ui needs a Consul token. For the cli there is a local
 proxy that logs in through Authelia (`task proxy:up|login|status|env|down`). `task tokens` prints the management tokens.
 
+Consul's bootstrap token (`cluster_consul_management_token` in the sops secrets, `acl.tokens.initial_management`) exists only while a cluster is
+built. The same deploy lets tofu-consul mint the **ops token** (policy `global-management`, `service_tokens.ops` in the encrypted state), writes the
+server configs without `initial_management` and deletes the bootstrap token from the cluster; tofu, `task backup`, `task smoke` and the restore use
+the ops token from then on (`consul_ops_token` in `scripts/lib.sh`). It is the same power as the bootstrap token (creating policies and tokens is
+`acl = write`, which cannot be scoped down); what changes is that no config file of any node holds it and that it can be rotated. If the state of
+tofu-consul does not belong to the cluster any more (rebuilt cluster, old state), the deploy stops with a message; the bootstrap secret in the sops
+file is valid only for a cluster that was built with it and not handed over yet.
+
 ## Authelia: second factor
 
 Traefik asks Authelia about **every** request on `websecure` (a default middleware of the entry point): a job that forgets the middleware
@@ -49,8 +57,14 @@ domain in `authelia_access_rules` (first match wins: put it after the rules of t
 registers the seeds in Authelia and writes the otpauth URI to `secrets/authelia/totp-<name>.txt` (git-ignored): put it into an
 authenticator app. The seed is the truth, so a lost database is repaired by the next deploy. The sqlite database lives in the host volume
 `authelia` (`/srv/authelia` on the nodes in `cluster_authelia_hosts`, the first ingress node by default) and is part of `task backup`. The job has
-`auto_revert = false` on purpose (a failed upgrade may already have migrated the database). Sessions: 7 days without a request, 7 days
+`auto_revert = false` on purpose (a failed upgrade may already have migrated the database). Sessions: 18 hours without a request, 24 hours
 at most after the login (`authelia_session_*`).
+
+Known limits (accepted): (1) there is one session cookie for the whole `cluster_domain`, so every app behind Traefik, public ones included, receives
+it. Replaying it reaches only the login of Nomad and Consul (both need an ACL token) and the read-only Traefik dashboard. Keep the admin on an own account
+(group `admin`, the only one the rules for `nomad.`/`consul.`/`traefik.` accept) and use it in a separate browser profile; apps are used with a normal account.
+(2) Traefik's router, forward-auth middleware and service for Authelia are in the file provider, but any job's consul tags can still add a router
+for a hostname of its own choice (also `nomad.`, with a high `priority`). Everyone who can submit jobs is an admin.
 
 ## Host firewall
 
@@ -90,7 +104,9 @@ By default `sudo` (Ubuntu) / `doas` (Alpine) are passwordless for the `ansible` 
   `cluster_host_volumes: [{name, path, read_only}]` in `host_vars` and use `volume` + `volume_mount`. A read-only mount of the docker
   socket still allows the whole docker API.
 * `cluster_docker_daemon_extra` is merged into `/etc/docker/daemon.json` (e.g. the `nvidia` runtime).
-* Logs: seven days, one file per day (`cluster_log_retention_days`); container logs and metrics are not handled.
+* Logs: the agents keep seven days, one file per day (`cluster_log_retention_days`). Container logs are rotated by size, docker cannot do days:
+  seven files of 50 MB per container (`cluster_docker_log_max_files`, `cluster_docker_log_max_size`). Metrics are not handled.
+* `no-new-privileges` is set as the daemon default; a job opts out with `security_opt = ["no-new-privileges=false"]`.
 
 ## Traefik behind wireguard (optional, for nodes without a public address)
 
@@ -100,8 +116,8 @@ stores the wg-quick config (no `DNS=`/`PostUp`/`PostDown`; keep `AllowedIPs` to 
 
 ## Backup and restore
 
-`task backup` writes `backups/<cluster>-<time>/`: Nomad and Consul snapshots, the tofu states, the authelia folder of each node that has
-one and traefik's `acme.json` (public ACME CAs), all age-encrypted to the recipients of `.sops.yaml` (newest `BACKUP_KEEP`, default 10).
+`task backup` writes `backups/<cluster>-<time>/`: Nomad and Consul snapshots, the tofu states, the authelia database of each node that has
+one (an SQL dump made by `sqlite3` in a throwaway container on the node, image `cluster_sqlite_image`, replayed by `task restore`) and traefik's `acme.json` (public ACME CAs), all age-encrypted to the recipients of `.sops.yaml` (newest `BACKUP_KEEP`, default 10).
 Application data is not part of it. Copy the folder off the machine, together with the age private key (`secrets/age/keys.txt`): without
 the key the backups and every secret are lost.
 
@@ -127,3 +143,8 @@ The restore refuses a cluster that already has workloads. Drilled on Incus VMs; 
 | `compose.override.yml`, `Taskfile.yml` | extra mounts for the tools container, extra tasks |
 
 Do not edit anything below `base/`: change the platform in its own repo and move the pointer with `task upgrade`.
+
+## Open ideas (not implemented)
+
+* An always-online intermediate CA (root offline, intermediate on a server, e.g. step-ca; nodes renew with their still-valid certificate). Leaf
+  certificates are valid for a year (`cluster_leaf_valid_days`) and renewed by `site.yml` / `task maintenance`; nothing alerts before they expire.

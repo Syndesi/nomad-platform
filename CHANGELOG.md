@@ -4,6 +4,16 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- Traefik: the router, the forward-auth middleware and the service of Authelia are in the file provider (`authelia@file`); Authelia's service has no
+  traefik tags any more. A job's tags can no longer redefine the middleware (which took the whole ingress down). The admin routers send HSTS and the
+  usual browser headers. New job variable `authelia_addr` (set by the deploy).
+- Consul: the bootstrap token (`initial_management`) is no longer in the server configs after the deploy. tofu-consul mints an ops token
+  (`global-management`) that tofu, `task backup`, `task smoke` and `task restore` use; the deploy deletes the bootstrap token from the cluster.
+  Existing clusters are migrated by the next `task deploy:ansible`. New: role `consul` tasks `token` / `handover`, `cluster_consul_ops_token`.
+- Authelia sessions: 18h inactivity, 24h lifetime (were 7 days).
+- Docker: container logs rotate (7 files of 50 MB, `cluster_docker_log_*`), `no-new-privileges` is the daemon default.
+- Nomad ACL: the deployer policy can neither read nor change `nomad/jobs/authelia` and `nomad/jobs/traefik` (secrets); only tofu-nomad writes them.
+- Backup: Authelia's sqlite is saved as an SQL dump by `sqlite3` in a throwaway container (`cluster_sqlite_image`, default `keinos/sqlite3:3.54.1`; nothing is installed on the nodes), not as a tar of the live files. `task restore` reads both.
 - Containers have no internet access by default: the firewall rejects new connections from the container bridges to anything outside the
   cluster and the container networks, and containers are given a restricted resolver (docker0): `*.consul` and the node's own names only, no
   public dns. A job that needs the internet uses `network { mode = "cni/egress" }` (a second bridge, `br-egress`; Connect sidecars work there too),

@@ -66,30 +66,9 @@ job "authelia" {
       name     = "authelia"
       port     = "http"
       provider = "consul"
-      tags = concat([
-        "traefik.enable=true",
-        "traefik.http.routers.authelia.rule=Host(`auth.${var.domain}`)",
-        "traefik.http.routers.authelia.entrypoints=websecure",
-        "traefik.http.routers.authelia.tls=true",
-        # an ops name: hybrid post-quantum key exchange only, see traefik/dynamic.yml.tpl
-        "traefik.http.routers.authelia.tls.options=pq-only@file",
-        "traefik.http.routers.authelia.service=authelia",
-        "traefik.http.services.authelia.loadbalancer.server.scheme=https",
-        "traefik.http.services.authelia.loadbalancer.serversTransport=cluster-ca@file",
-        # The forward-auth middleware lives with the service, so it follows authelia wherever it
-        # runs and disappears (routes using it stop answering) when authelia is down.
-        # $${...} stays literal in HCL; nomad fills in the real address when it registers the tags.
-        # authelia serves https with the node's certificate (names: the cluster address among them); traefik verifies it with the cluster CA
-        "traefik.http.middlewares.authelia.forwardAuth.address=https://$${NOMAD_ADDR_http}/api/authz/forward-auth",
-        "traefik.http.middlewares.authelia.forwardAuth.tls.ca=/secrets/ca.pem",
-        "traefik.http.middlewares.authelia.forwardAuth.trustForwardHeader=true",
-        # only what authelia needs: the session cookie, the forwarding headers and Accept / X-Requested-With (without them authelia answers 401 instead of a redirect). By default traefik copies ALL request headers, i.e. also
-        # X-Nomad-Token / X-Consul-Token of command line tools, to authelia (plain http, possibly another node).
-        "traefik.http.middlewares.authelia.forwardAuth.authRequestHeaders=Cookie,Accept,X-Requested-With,X-Forwarded-For,X-Forwarded-Proto,X-Forwarded-Host,X-Forwarded-Uri,X-Forwarded-Method",
-        "traefik.http.middlewares.authelia.forwardAuth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email",
-        ], var.tls_resolver != "" ? [
-        "traefik.http.routers.authelia.tls.certresolver=${var.tls_resolver}",
-      ] : [])
+      # No traefik tags on purpose: the router, the forward-auth middleware and the service of authelia are in traefik's file provider
+      # (jobs/traefik/dynamic.yml.tpl). Tags are written by whoever submits a job and must not define the login portal or the middleware.
+      tags = []
 
       check {
         type     = "http"

@@ -30,7 +30,8 @@ case "${1:-}" in
 cluster_consul_gossip_key: "$(key)"
 # Nomad gossip encryption key (nomad operator gossip keyring format)
 cluster_nomad_gossip_key: "$(key)"
-# Consul: acl.tokens.initial_management - a global-management token that exists from first start
+# Consul: acl.tokens.initial_management - the BOOTSTRAP token, only in the config while the cluster is built; tofu-consul then mints the ops token
+# and the deploy deletes this one from the cluster
 cluster_consul_management_token: "$(uuid)"
 # Nomad: SecretID handed to 'nomad acl bootstrap <file>' (works once per cluster)
 cluster_nomad_management_token: "$(uuid)"

@@ -89,6 +89,10 @@ resource "nomad_acl_policy" "deployer" {
       policy = "write"
       variables {
         path "nomad/jobs/*" { capabilities = ["read", "write", "list", "destroy"] }
+        # written by tofu-nomad with the management token: authelia's config (session secret, storage key, password hashes) and traefik's
+        # tokens. The deployer neither reads nor changes them (the more specific path wins over the glob above).
+        path "nomad/jobs/authelia" { capabilities = ["deny"] }
+        path "nomad/jobs/traefik" { capabilities = ["deny"] }
       }
     }
     host_volume "*" { policy = "write" }

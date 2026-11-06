@@ -5,7 +5,7 @@ output "agent_tokens" {
 }
 
 output "service_tokens" {
-  description = "traefik, nomad-agent, readonly, dns => secret id"
+  description = "traefik, nomad-agent, readonly, dns, ops => secret id"
   sensitive   = true
   value       = { for k, v in data.consul_acl_token_secret_id.service : k => v.secret_id }
 }

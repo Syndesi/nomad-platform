@@ -10,6 +10,11 @@ consul_client_addr: "127.0.0.1"
 # opens the port to the container bridges only (cluster_firewall_bridge_tcp_ports), other nodes cannot reach it.
 consul_https_addr: "127.0.0.1 {{ cluster_ip }}"
 
+# initial_management (the bootstrap token) is written only while a cluster is built: by the first play of site.yml on a fresh deploy or a
+# restore, never by the later config pass. A server that has it in its config creates the token again whenever it becomes leader, so it must
+# be gone from every config before the token is deleted (tasks handover).
+consul_initial_management: false
+
 # Token the agent itself uses (node identity, minted by tofu-consul, read from the encrypted state).
 # Empty until tofu-consul ran; the servers then run the `config` tasks again.
 consul_agent_token: "{{ (cluster_consul_out.agent_tokens | default({}))[inventory_hostname] | default('') }}"

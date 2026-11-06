@@ -18,12 +18,12 @@ entryPoints:
   websecure:
     address: ":443"
     http:
-      # Every router on this entry point goes through authelia first (the middleware comes with the authelia job, jobs/authelia.nomad.hcl):
+      # Every router on this entry point goes through authelia first (the middleware is in the file provider, dynamic.yml.tpl, so that no job's tags can replace it):
       # a job that forgets the middleware is not open to the internet. Opting out is an access rule with `policy: bypass` for the job's
       # domain in the cluster's authelia_access_rules; domains without any rule are denied. Without authelia running the routes answer
       # with an error and not without login.
       middlewares:
-        - authelia@consulcatalog
+        - authelia@file
     transport:
       respondingTimeouts:
         readTimeout: 600s

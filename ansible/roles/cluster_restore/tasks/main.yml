@@ -2,7 +2,7 @@
 - name: Environment of the cli
   ansible.builtin.set_fact:
     cluster_restore_env: >-
-      {{ {'CONSUL_HTTP_ADDR': 'https://127.0.0.1:' ~ cluster_consul_https_port, 'CONSUL_CACERT': cluster_tls_dir ~ '/ca.pem', 'CONSUL_HTTP_TOKEN': cluster_consul_management_token}
+      {{ {'CONSUL_HTTP_ADDR': 'https://127.0.0.1:' ~ cluster_consul_https_port, 'CONSUL_CACERT': cluster_tls_dir ~ '/ca.pem', 'CONSUL_HTTP_TOKEN': cluster_consul_ops_token}
          if cluster_restore_product == 'consul' else
          {'NOMAD_ADDR': 'https://127.0.0.1:' ~ cluster_nomad_http_port, 'NOMAD_CACERT': cluster_tls_dir ~ '/ca.pem', 'NOMAD_TOKEN': cluster_nomad_management_token} }}
   no_log: true
@@ -13,7 +13,7 @@
     url: >-
       {{ 'https://127.0.0.1:' ~ cluster_consul_https_port ~ '/v1/catalog/services' if cluster_restore_product == 'consul'
          else 'https://127.0.0.1:' ~ cluster_nomad_http_port ~ '/v1/jobs' }}
-    headers: "{{ {'X-Consul-Token': cluster_consul_management_token} if cluster_restore_product == 'consul' else {'X-Nomad-Token': cluster_nomad_management_token} }}"
+    headers: "{{ {'X-Consul-Token': cluster_consul_ops_token} if cluster_restore_product == 'consul' else {'X-Nomad-Token': cluster_nomad_management_token} }}"
     ca_path: "{{ cluster_tls_dir }}/ca.pem"
     return_content: true
     status_code: 200

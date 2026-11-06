@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Backup of what lives only on the servers: the Nomad and Consul raft snapshots (jobs, variables, ACLs, KV, intentions),
-# the tofu states that belong to them (task restore needs both from the same moment), the folder of authelia (second factors) and traefik's acme.json (the ACME account and certificates, only with a public ACME CA). NOT included: application
+# the tofu states that belong to them (task restore needs both from the same moment), the database of authelia (second factors, SQL dump) and traefik's acme.json (the ACME account and certificates, only with a public ACME CA). NOT included: application
 # data, host volumes, anything the cluster repo already holds (inventory, encrypted secrets, states).
 # Every file is age-encrypted to the recipients of .sops.yaml, so the backups are safe to move off site. Inside the tools
 # container, via `task backup`; written to <cluster repo>/backups/<name>-<time>/ (git-ignored), the newest BACKUP_KEEP stay.
@@ -22,7 +22,7 @@ mkdir -p "$out"
 work=$(mktemp -d /dev/shm/backup.XXXXXX)
 trap 'rm -rf "$work"; [ -e "$out/.complete" ] || { echo "backup failed, removing $out" >&2; rm -rf "$out"; }' EXIT
 nm=$("$BASE/scripts/secrets.sh" get cluster_nomad_management_token)
-cm=$("$BASE/scripts/secrets.sh" get cluster_consul_management_token)
+cm=$(consul_ops_token)
 
 # snapshot <file> <env assignment> <snapshot save command>: the server writes it into a private temp dir and streams it back
 snapshot() {
@@ -46,12 +46,18 @@ for n in $(inventory_group cluster_ingress); do
   fi
 done
 
-# authelia's folder (sqlite: second factors, devices, bans) from every node that has one: tar as root through ansible, base64 for the trip. A plain copy of
-# the files: authelia writes rarely (a login, a ban), but a backup in the middle of a login could in theory catch a half-written file.
+# authelia's database (sqlite: second factors, devices, bans) from every node that has one, as an SQL dump made by sqlite3 itself (in a throwaway container, nothing is installed on the node) (`.dump` reads in
+# one transaction: consistent even if authelia writes meanwhile; a copy of the file could catch a half-written page). Restore replays it into a new file.
 adir=$(cvar cluster_authelia_dir)
+sqlite_image=$(cvar cluster_sqlite_image)
 for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; } | sort -u); do
   if cluster_root "$n" "test -s $adir/db.sqlite3" >/dev/null 2>&1; then
-    cluster_root "$n" "tar -C $adir -cf - . | base64" | base64 -d | age "${rflags[@]}" > "$out/authelia-$n.tar.age"
+    [ -n "$sqlite_image" ] || { echo "cluster_sqlite_image is not set (an image with sqlite3, see the defaults): needed to dump the database of authelia" >&2; exit 1; }
+    # a throwaway container: no network, only the authelia folder (rw: sqlite needs the -shm file of a WAL database even to read)
+    cluster_root "$n" "docker run --rm --network none --read-only --user 0 -v $adir:/data --entrypoint sqlite3 $sqlite_image -cmd '.timeout 10000' /data/db.sqlite3 .dump" | age "${rflags[@]}" > "$out/authelia-$n.sql.age"
+    age -d -i "${SOPS_AGE_KEY_FILE:-/age/keys.txt}" "$out/authelia-$n.sql.age" > "$work/authelia.sql"
+    grep -q 'CREATE TABLE' "$work/authelia.sql" || { echo "authelia dump of $n is empty" >&2; exit 1; }
+    rm -f "$work/authelia.sql"
   fi
 done
 

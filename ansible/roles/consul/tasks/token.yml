@@ -1,0 +1,42 @@
+---
+# Which consul token does the cluster accept from the controller: the ops token (policy global-management, minted by tofu-consul, in the encrypted
+# state) or the bootstrap token (initial_management, the sops secret)? Asks the local consul of the first server, so run it there.
+# Sets on localhost: cluster_consul_token_effective (the ops token if it works, else the bootstrap token) and cluster_consul_bootstrap_alive.
+# Fails if neither works: the state of tofu-consul does not belong to this cluster (a rebuilt cluster with the old state: remove state/tofu-consul
+# and state/tofu-nomad, or restore the backup that belongs to them).
+- name: Candidates, the ops token first
+  ansible.builtin.set_fact:
+    consul_token_candidates: >-
+      {{ ([{'name': 'ops', 'token': cluster_consul_out.service_tokens.ops}] if (cluster_consul_out.service_tokens | default({})).ops is defined else [])
+         + [{'name': 'bootstrap', 'token': cluster_consul_management_token}] }}
+  no_log: true
+
+- name: Ask the local consul about each token
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ cluster_consul_https_port }}/v1/acl/token/self"
+    ca_path: "{{ cluster_tls_dir }}/ca.pem"
+    headers:
+      X-Consul-Token: "{{ item.token }}"
+    status_code: [200, 403]
+  loop: "{{ consul_token_candidates }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: consul_token_probe
+  no_log: true
+  changed_when: false
+
+- name: One of them works
+  ansible.builtin.assert:
+    that: consul_token_probe.results | selectattr('status', 'eq', 200) | list | length > 0
+    fail_msg: >-
+      Neither the ops token (state/tofu-consul) nor the bootstrap token (cluster_consul_management_token) is accepted by consul. The state does not
+      belong to this cluster: after a rebuild remove state/tofu-consul and state/tofu-nomad (task restore puts the matching ones in place).
+    quiet: true
+
+- name: The token the controller works with
+  ansible.builtin.set_fact:
+    cluster_consul_token_effective: "{{ consul_token_probe.results | selectattr('status', 'eq', 200) | map(attribute='item.token') | list | first }}"
+    cluster_consul_bootstrap_alive: "{{ 'bootstrap' in (consul_token_probe.results | selectattr('status', 'eq', 200) | map(attribute='item.name') | list) }}"
+  delegate_to: localhost
+  delegate_facts: true
+  no_log: true

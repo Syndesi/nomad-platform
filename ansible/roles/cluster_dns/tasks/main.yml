@@ -15,7 +15,7 @@
 - name: Docker daemon dns
   ansible.builtin.copy:
     dest: /etc/docker/daemon.json
-    content: "{{ ({'dns': [cluster_dns_docker_bridge_ip]} | combine(cluster_docker_daemon_extra, recursive=True)) | to_nice_json }}\n"
+    content: "{{ ({'dns': [cluster_dns_docker_bridge_ip], 'log-driver': 'json-file', 'log-opts': {'max-size': cluster_docker_log_max_size, 'max-file': cluster_docker_log_max_files | string}, 'no-new-privileges': true} | combine(cluster_docker_daemon_extra, recursive=True)) | to_nice_json }}\n"
     owner: root
     group: root
     mode: "0644"
@@ -159,12 +159,25 @@
         mode: "0644"
       register: cluster_dns_dhcpcd_deny
 
-    # a running dhcpcd only reads its config at start: without this it overwrites resolv.conf at the next lease renewal
-    - name: dhcpcd restarts to read it (same lease, the address stays)
-      ansible.builtin.service:
-        name: dhcpcd
-        state: restarted
-      when: cluster_dns_dhcpcd is changed or cluster_dns_dhcpcd_deny is changed
+    # A running dhcpcd only reads its config when told to, otherwise it overwrites resolv.conf at the next lease renewal. The first dhcpcd is
+    # started at boot by the network stack (ifupdown), not by OpenRC: `rc-service dhcpcd restart` leaves that one running with the old
+    # config and starts a second manager next to it. So: never restart, tell the running one to reload (`dhcpcd -n`, same lease, the
+    # address stays) and make sure that only one manager runs (the one that owns the pid file; a leftover is stopped). Runs on every deploy.
+    - name: Exactly one dhcpcd manager runs, with the current config
+      ansible.builtin.shell: |
+        keep=$(cat /run/dhcpcd/pid 2>/dev/null || true)
+        mgrs=$(pgrep -f 'dhcpcd: \[manager\]' || true)
+        n=0
+        if [ -n "$keep" ] && printf '%s\n' "$mgrs" | grep -qx "$keep"; then
+          for p in $mgrs; do
+            if [ "$p" != "$keep" ]; then kill "$p" && n=$((n + 1)); fi
+          done
+        fi
+        {% if cluster_dns_dhcpcd is changed or cluster_dns_dhcpcd_deny is changed %}dhcpcd -n >/dev/null 2>&1 || true{% endif %}
+
+        echo "stopped $n"
+      register: cluster_dns_dhcpcd_single
+      changed_when: "'stopped 0' not in cluster_dns_dhcpcd_single.stdout or cluster_dns_dhcpcd is changed or cluster_dns_dhcpcd_deny is changed"
 
     - name: resolv.conf points at the local dnsmasq
       ansible.builtin.copy:

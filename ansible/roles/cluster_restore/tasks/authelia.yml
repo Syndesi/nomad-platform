@@ -1,20 +1,27 @@
 ---
-# Authelia's folder (sqlite: second factors, devices, bans) from the backup, onto the node it belongs to. Before the authelia job starts.
+# Authelia's database (sqlite: second factors, devices, bans) from the backup, onto the node it belongs to. Before the authelia job starts.
 # A backup without it (or a node without authelia) is not an error: the deploy registers the TOTP seeds again, only the device list is lost.
-- name: The backup has the authelia folder of this node
+# Current backups hold an SQL dump (authelia-<node>.sql.age), replayed into a new db.sqlite3; backups of older versions hold the folder as a tar.
+- name: The backup has the authelia database of this node
   ansible.builtin.stat:
-    path: "{{ cluster_restore_dir }}/authelia-{{ inventory_hostname }}.tar.age"
+    path: "{{ cluster_restore_dir }}/authelia-{{ inventory_hostname }}.{{ item }}.age"
+  loop: [sql, tar]
   delegate_to: localhost
   become: false
-  register: cluster_restore_authelia_file
+  register: cluster_restore_authelia_files
+
+- name: Which form
+  ansible.builtin.set_fact:
+    cluster_restore_authelia_form: >-
+      {{ (cluster_restore_authelia_files.results | selectattr('stat.exists') | map(attribute='item') | list | first) | default('') }}
 
 - name: Say what is not restored
   ansible.builtin.debug:
-    msg: "no authelia folder for {{ inventory_hostname }} in the backup: the second factors are registered again from the seeds"
-  when: not cluster_restore_authelia_file.stat.exists
+    msg: "no authelia database for {{ inventory_hostname }} in the backup: the second factors are registered again from the seeds"
+  when: cluster_restore_authelia_form == ''
 
-- name: Authelia folder
-  when: cluster_restore_authelia_file.stat.exists
+- name: Authelia database
+  when: cluster_restore_authelia_form != ''
   block:
     - name: Directory on the node (tmpfs, root only)
       ansible.builtin.file:
@@ -27,8 +34,8 @@
     - name: Decrypt on the controller (tmpfs)
       ansible.builtin.shell: >-
         set -o pipefail; umask 077;
-        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/authelia-' ~ inventory_hostname ~ '.tar.age') | quote }}
-        > {{ (cluster_run_dir ~ '/restore-authelia-' ~ inventory_hostname ~ '.tar') | quote }}
+        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/authelia-' ~ inventory_hostname ~ '.' ~ cluster_restore_authelia_form ~ '.age') | quote }}
+        > {{ (cluster_run_dir ~ '/restore-authelia-' ~ inventory_hostname ~ '.' ~ cluster_restore_authelia_form) | quote }}
       args:
         executable: /bin/bash
       delegate_to: localhost
@@ -37,28 +44,45 @@
 
     - name: Copy to the node
       ansible.builtin.copy:
-        src: "{{ cluster_run_dir }}/restore-authelia-{{ inventory_hostname }}.tar"
-        dest: "{{ cluster_restore_node_dir }}/authelia.tar"
+        src: "{{ cluster_run_dir }}/restore-authelia-{{ inventory_hostname }}.{{ cluster_restore_authelia_form }}"
+        dest: "{{ cluster_restore_node_dir }}/authelia.{{ cluster_restore_authelia_form }}"
         mode: "0600"
         owner: root
         group: root
 
-    - name: Unpack into the authelia folder
+    - name: The image with sqlite3 is set
+      ansible.builtin.assert:
+        that: cluster_sqlite_image | length > 0
+        fail_msg: "cluster_sqlite_image is not set (an image with sqlite3, see the defaults): needed to restore the database of authelia"
+        quiet: true
+      when: cluster_restore_authelia_form == 'sql'
+
+    - name: Replay the SQL dump into a new database (throwaway container, no network)
+      ansible.builtin.shell: >-
+        set -e; umask 077; rm -f {{ cluster_authelia_dir | quote }}/db.sqlite3 {{ cluster_authelia_dir | quote }}/db.sqlite3-*;
+        docker run --rm --network none --user 0 -v {{ cluster_authelia_dir | quote }}:/data -v {{ cluster_restore_node_dir }}/authelia.sql:/in.sql:ro
+        --entrypoint sqlite3 {{ cluster_sqlite_image | quote }} /data/db.sqlite3 ".read /in.sql"
+      when: cluster_restore_authelia_form == 'sql'
+      changed_when: true
+
+    - name: Unpack into the authelia folder (backup of an older version)
       ansible.builtin.unarchive:
         src: "{{ cluster_restore_node_dir }}/authelia.tar"
         dest: "{{ cluster_authelia_dir }}"
         remote_src: true
         owner: root
         group: root
+      when: cluster_restore_authelia_form == 'tar'
   always:
-    - name: Remove the tar from the node
+    - name: Remove the dump from the node
       ansible.builtin.file:
         path: "{{ cluster_restore_node_dir }}"
         state: absent
 
-    - name: Remove the clear-text tar from the controller
+    - name: Remove the clear-text copy from the controller
       ansible.builtin.file:
-        path: "{{ cluster_run_dir }}/restore-authelia-{{ inventory_hostname }}.tar"
+        path: "{{ cluster_run_dir }}/restore-authelia-{{ inventory_hostname }}.{{ cluster_restore_authelia_form }}"
         state: absent
       delegate_to: localhost
       become: false
+      when: cluster_restore_authelia_form != ''

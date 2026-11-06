@@ -299,19 +299,38 @@
   serial: 1
   gather_facts: false
   roles:
-    - consul
+    # the bootstrap token goes into the config of a cluster that is built now (fresh deploy, restore) or was built before the ops token existed
+    - role: consul
+      vars:
+        consul_initial_management: "{{ 'ops' not in (cluster_consul_out.service_tokens | default({})) or cluster_restore_dir | length > 0 }}"
 
 - name: Restore the consul snapshot (task restore)
   hosts: cluster_servers[0]
   become: true
   gather_facts: false
   tasks:
+    - name: Which consul token the cluster accepts
+      ansible.builtin.include_role:
+        name: consul
+        tasks_from: token
+      when: cluster_restore_dir | length > 0
+
     - name: Consul snapshot
       ansible.builtin.include_role:
         name: cluster_restore
       vars:
         cluster_restore_product: consul
       when: cluster_restore_dir | length > 0
+
+- name: Which consul token the cluster accepts
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Probe (bootstrap token or ops token)
+      ansible.builtin.include_role:
+        name: consul
+        tasks_from: token
 
 - name: Consul acl objects (tofu-consul)
   hosts: localhost
@@ -327,7 +346,7 @@
         tofu_stage_vars:
           consul_address: "127.0.0.1:{{ tofu_stage_consul_port }}"
           ca_file: "{{ cluster_ca_cert }}"
-          consul_token: "{{ cluster_consul_management_token }}"
+          consul_token: "{{ cluster_consul_ops_token }}"
           datacenter: "{{ cluster_datacenter }}"
           nodes: "{{ (groups['cluster_servers'] + groups['cluster_clients']) | unique }}"
 
@@ -339,10 +358,26 @@
   serial: 1
   gather_facts: false
   tasks:
-    - name: Consul config with the agent token
+    - name: Consul config with the agent token (and without the bootstrap token)
       ansible.builtin.include_role:
         name: consul
         tasks_from: config
+
+# No server has initial_management in its config any more: the bootstrap token can go, the ops token (tofu-consul) replaces it.
+- name: Hand over from the bootstrap token to the ops token
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Which token works now
+      ansible.builtin.include_role:
+        name: consul
+        tasks_from: token
+
+    - name: Delete the bootstrap token
+      ansible.builtin.include_role:
+        name: consul
+        tasks_from: handover
 
 - name: Consul clients
   hosts: cluster_clients:!cluster_servers

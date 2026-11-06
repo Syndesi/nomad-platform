@@ -10,7 +10,7 @@
     cluster_jobs_first_server: "{{ groups['cluster_servers'][0] }}"
     tofu_stage_vars:
       consul_address: "127.0.0.1:{{ tofu_stage_consul_port }}"
-      consul_token: "{{ cluster_consul_management_token }}"
+      consul_token: "{{ cluster_consul_ops_token }}"
       nomad_jwks_url: "https://{{ hostvars[cluster_jobs_first_server].cluster_ip }}:{{ cluster_nomad_http_port }}/.well-known/jwks.json"
       nomad_address: "https://127.0.0.1:{{ tofu_stage_nomad_port }}"
       ca_file: "{{ cluster_ca_cert }}"

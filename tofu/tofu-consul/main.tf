@@ -58,6 +58,9 @@ resource "consul_acl_token" "service" {
     traefik     = "traefik"
     nomad-agent = "nomad-agent"
     readonly    = "builtin/global-read-only"
+    # What the controller works with (tofu, backup, restore) once the bootstrap token (`initial_management`) is handed over and deleted
+    # (role consul, tasks handover). Same power; the difference is that its secret is in no config file of any node.
+    ops = "global-management"
     dns         = "dns"
   }
   description = "${each.key} (managed by opentofu)"

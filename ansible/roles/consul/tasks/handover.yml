@@ -1,0 +1,27 @@
+---
+# The bootstrap token (initial_management) is deleted from the cluster once the ops token works. Run on the first server, after tasks token, and
+# after every server wrote its config WITHOUT initial_management (a server that still has it creates the token again as soon as it is leader).
+# Nothing to do when the bootstrap token is gone already (every later deploy).
+- name: The bootstrap token is deleted
+  when: hostvars['localhost'].cluster_consul_bootstrap_alive | bool and hostvars['localhost'].cluster_consul_token_effective != cluster_consul_management_token
+  block:
+    - name: The accessor of the bootstrap token
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ cluster_consul_https_port }}/v1/acl/token/self"
+        ca_path: "{{ cluster_tls_dir }}/ca.pem"
+        headers:
+          X-Consul-Token: "{{ cluster_consul_management_token }}"
+        return_content: true
+      register: consul_handover_self
+      no_log: true
+      changed_when: false
+
+    - name: Delete it (with the ops token)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ cluster_consul_https_port }}/v1/acl/token/{{ consul_handover_self.json.AccessorID }}"
+        method: DELETE
+        ca_path: "{{ cluster_tls_dir }}/ca.pem"
+        headers:
+          X-Consul-Token: "{{ hostvars['localhost'].cluster_consul_token_effective }}"
+      no_log: true
+      changed_when: true

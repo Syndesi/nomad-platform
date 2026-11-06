@@ -5,7 +5,7 @@ acl {
   down_policy = "extend-cache"
   enable_token_persistence = true
   tokens {
-{% if consul_is_server %}
+{% if consul_is_server and consul_initial_management %}
     initial_management = "{{ cluster_consul_management_token }}"
 {% endif %}
 {% if consul_agent_token %}

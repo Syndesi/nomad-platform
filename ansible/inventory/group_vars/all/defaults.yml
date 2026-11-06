@@ -72,6 +72,9 @@ ansible_ssh_common_args: "-F {{ cluster_ssh_config_file }}"
 # Loaded into these facts on localhost by the first plays of site.yml / by tofu_stage.
 cluster_consul_out: "{{ hostvars['localhost']['tofu_out_consul'] | default({}) }}"
 cluster_nomad_out: "{{ hostvars['localhost']['tofu_out_nomad'] | default({}) }}"
+# The consul token of the controller. cluster_consul_management_token (sops) is only the BOOTSTRAP token (initial_management, first start). Once tofu-consul
+# has minted the ops token, the bootstrap token is deleted. Which of the two the cluster accepts is probed (role consul, tasks token).
+cluster_consul_ops_token: "{{ hostvars['localhost']['cluster_consul_token_effective'] | default(cluster_consul_management_token) }}"
 
 # --- access to the nodes (ssh) --------------------------------------------------------------
 # One unprivileged account does everything; root cannot log in over ssh. It is created on a node once by
@@ -127,6 +130,15 @@ cluster_docker_volumes_enabled: false
 # Merged into /etc/docker/daemon.json (the platform writes `dns`); e.g. the nvidia runtime of a gpu node:
 #   cluster_docker_daemon_extra: { runtimes: { nvidia: { path: nvidia-container-runtime, args: [] } } }
 cluster_docker_daemon_extra: {}
+# Image with a `sqlite3` binary (any image that has one in its PATH; use a version tag, no digests and no `latest`). `task backup` and `task restore` run it as a throwaway
+# container on the authelia node (no network, only the authelia folder mounted) to dump / replay Authelia's database: nothing is installed on the nodes.
+# The nodes pull it through docker when it is first used.
+cluster_sqlite_image: keinos/sqlite3:3.54.1
+# Container logs (docker json-file): docker rotates by size only, not by day. Per container: max-file files of max-size.
+cluster_docker_log_max_size: 50m
+cluster_docker_log_max_files: 7
+# The platform also sets `no-new-privileges` for all containers (daemon default): setuid binaries inside a container do not gain
+# privileges. A job that needs it opts out with `security_opt = ["no-new-privileges=false"]`.
 
 # --- container networks / egress ------------------------------------------------------------------------
 # Containers have NO access to the internet by default: the firewall rejects new connections from the container bridges to anything outside
@@ -158,8 +170,8 @@ cluster_authelia_dir: /srv/authelia
 cluster_authelia_tls_dir: /etc/cluster/tls-authelia
 cluster_ingress_tls_dir: /etc/cluster/tls-ingress
 # authelia sessions (in memory): a session ends after `inactivity` without a request or `expiration` after the login; "remember me" lengthens it
-authelia_session_inactivity: 168h # 7 days without a request end the session
-authelia_session_expiration: 168h # 7 days after the login the session ends whatever happened in between
+authelia_session_inactivity: 18h # without a request for this long the session ends
+authelia_session_expiration: 24h # this long after the login the session ends whatever happened in between (one login per day)
 authelia_session_remember_me: 168h
 # the name an authenticator app shows for the account
 authelia_totp_issuer: "{{ cluster_domain }}"
