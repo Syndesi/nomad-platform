@@ -65,5 +65,11 @@
       loop: ["{{ tofu_stage_consul_port }}", "{{ tofu_stage_nomad_port }}"]
       changed_when: false
 
+    - name: Delete the variables file (clear text tokens and secrets)
+      ansible.builtin.file:
+        path: "{{ tofu_stage_varfile }}"
+        state: absent
+      no_log: true
+
 - name: "{{ tofu_stage_name }}: outputs"
   ansible.builtin.include_tasks: outputs.yml

@@ -15,6 +15,13 @@ cluster_acme_ca: internal
 
 # PKI (the CA itself is created once by `task pki:ca`)
 cluster_ca_valid_days: 3650
+# The CA is name-constrained (x509 nameConstraints, critical): it can only sign for these names and addresses, so an operator who imports it into
+# a browser does not trust it for the rest of the internet. Every leaf name must lie within them (cluster_pki_extra_sans too). Changing them
+# means a new CA (task pki:ca on a fresh start, then redeploy everything). IPv4 only, as CIDR; the default is loopback + RFC 1918 + CGNAT
+# (what cluster_private_address_regex accepts), because the subnet itself is only known per node.
+cluster_ca_permitted_dns: "{{ ([cluster_domain, cluster_node_domain, 'consul', 'nomad', 'host.internal', 'localhost'] + cluster_ca_extra_dns) | unique }}"
+cluster_ca_extra_dns: []
+cluster_ca_permitted_ips: ['127.0.0.1/32', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10']
 cluster_leaf_valid_days: 365 # a leaf is re-issued by site.yml once half of this is over (maintenance always re-issues)
 
 # Ports used on the nodes (https only; the plain http apis are switched off)
@@ -172,7 +179,7 @@ cluster_ingress_tls_dir: /etc/cluster/tls-ingress
 # authelia sessions (in memory): a session ends after `inactivity` without a request or `expiration` after the login; "remember me" lengthens it
 authelia_session_inactivity: 18h # without a request for this long the session ends
 authelia_session_expiration: 24h # this long after the login the session ends whatever happened in between (one login per day)
-authelia_session_remember_me: 168h
+authelia_session_remember_me: -1 # -1 disables "remember me" (it would outlive the 24h cap); a duration such as 168h enables it
 # the name an authenticator app shows for the account
 authelia_totp_issuer: "{{ cluster_domain }}"
 # WebAuthn (security keys): false by default, see README

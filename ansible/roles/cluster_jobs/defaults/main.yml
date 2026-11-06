@@ -1,10 +1,13 @@
 ---
 cluster_jobs_local_dir: "{{ cluster_base_dir }}/jobs"
 cluster_jobs_remote_dir: /etc/cluster/jobs
+# Jobs are run with the deployer token (tofu-nomad: run jobs, no acl, no authelia / traefik secrets), not the management token, which only
+# bootstraps the acl system and serves tofu-nomad, backup and restore.
+cluster_jobs_token: "{{ cluster_nomad_out.nomad_tokens.deployer }}"
 cluster_jobs_env:
   NOMAD_ADDR: "https://127.0.0.1:{{ cluster_nomad_http_port }}"
   NOMAD_CACERT: "{{ cluster_tls_dir }}/ca.pem"
-  NOMAD_TOKEN: "{{ cluster_nomad_management_token }}"
+  NOMAD_TOKEN: "{{ cluster_jobs_token }}"
 
 # ACME resolver name used inside traefik; '' = ingress cert from the cluster CA
 cluster_jobs_tls_resolver: "{{ '' if cluster_acme_ca == 'internal' else 'le' }}"

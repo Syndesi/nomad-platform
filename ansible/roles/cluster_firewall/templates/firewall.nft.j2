@@ -20,6 +20,12 @@ table inet {{ cluster_firewall_table }} {
 
     # ssh from anywhere, except from the container bridges (a compromised workload gets no path to sshd)
     iifname { "docker0", "nomad", "br-*" } tcp dport 22 drop
+{% if cluster_firewall_ssh_rate | trim %}
+    # new connections only (an open session is "established" and accepted above); the cluster's own sources are exempt
+    ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } tcp dport 22 accept
+    tcp dport 22 ct state new meter ssh_new { ip saddr timeout 5m limit rate over {{ cluster_firewall_ssh_rate }} burst {{ cluster_firewall_ssh_burst }} packets } drop
+    tcp dport 22 ct state new meter ssh_new6 { ip6 saddr timeout 5m limit rate over {{ cluster_firewall_ssh_rate }} burst {{ cluster_firewall_ssh_burst }} packets } drop
+{% endif %}
     tcp dport 22 accept
 
     # containers on the host's bridges: only dns and what cluster_firewall_bridge_*_ports lists, not the whole host

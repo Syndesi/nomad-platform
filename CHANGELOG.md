@@ -10,7 +10,11 @@ Notable changes per version. Older history is in git.
 - Consul: the bootstrap token (`initial_management`) is no longer in the server configs after the deploy. tofu-consul mints an ops token
   (`global-management`) that tofu, `task backup`, `task smoke` and `task restore` use; the deploy deletes the bootstrap token from the cluster.
   Existing clusters are migrated by the next `task deploy:ansible`. New: role `consul` tasks `token` / `handover`, `cluster_consul_ops_token`.
-- Authelia sessions: 18h inactivity, 24h lifetime (were 7 days).
+- Authelia sessions: 18h inactivity, 24h lifetime, "remember me" off (`authelia_session_remember_me: -1`; were 7 days).
+- The cluster CA is name-constrained (critical `nameConstraints`: `cluster_domain`, `cluster_node_domain`, `.consul`, `.nomad`, `host.internal`, `localhost`, loopback + private IPv4 ranges; `cluster_ca_permitted_*`). Existing CAs are not changed: to get the constraint make a new CA (`pki/ca.pem` and `ca.sops.yml` deleted, `task pki:ca`) and redeploy; the nodes' short hostnames are no longer certificate names (the FQDN is).
+- Jobs (`cluster_jobs`) are run with the deployer token from tofu-nomad (`cluster_jobs_token`), not the management token (bootstrap, tofu-nomad, backup, restore, TOTP).
+- Firewall: new ssh connections are rate limited per source address (`cluster_firewall_ssh_rate`, default 10/minute, burst 10, `''` = off); the cluster's subnets are exempt.
+- tofu: the clear text variables file (tokens, secrets) is deleted from tmpfs right after each apply.
 - Docker: container logs rotate (7 files of 50 MB, `cluster_docker_log_*`), `no-new-privileges` is the daemon default.
 - Nomad ACL: the deployer policy can neither read nor change `nomad/jobs/authelia` and `nomad/jobs/traefik` (secrets); only tofu-nomad writes them.
 - Backup: Authelia's sqlite is saved as an SQL dump by `sqlite3` in a throwaway container (`cluster_sqlite_image`, default `keinos/sqlite3:3.54.1`; nothing is installed on the nodes), not as a tar of the live files. `task restore` reads both.

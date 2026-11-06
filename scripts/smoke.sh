@@ -70,8 +70,10 @@ done
 
 # firewall: the table is loaded, the input chain drops by default, and the cluster ports are limited to the subnet
 if [ "$(cvar cluster_firewall_enabled)" = True ] || [ "$(cvar cluster_firewall_enabled)" = true ]; then
+  # with the ssh rate limit on, the cluster's exemption rule (ip saddr ... tcp dport 22 accept) matches two of the patterns: 4 lines, not 3
+  fw_lines=3; [ -n "$(cvar "cluster_firewall_ssh_rate | trim")" ] && fw_lines=4
   for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; } | sort -u); do
-    root_check "firewall on $n: table loaded, input policy drop, ssh open, cluster ports limited" "$n" "nft list chain inet cluster input | grep -c -e 'policy drop' -e 'tcp dport 22 accept' -e 'ip saddr .* tcp dport' | tr -d ' '" 3
+    root_check "firewall on $n: table loaded, input policy drop, ssh open (rate limited), cluster ports limited" "$n" "nft list chain inet cluster input | grep -c -e 'policy drop' -e 'tcp dport 22 accept' -e 'ip saddr .* tcp dport' | tr -d ' '" "$fw_lines"
   done
 fi
 
