@@ -5,6 +5,11 @@ log:
   format: json
 server:
   address: 'tcp://:9091'
+  # https: traefik's forward-auth calls (session cookies) cross the cluster network. The certificate is the node's own, made by role
+  # cluster_tls, mounted from the node (host volume authelia-tls, jobs/authelia.nomad.hcl); traefik verifies it with the cluster CA.
+  tls:
+    certificate: /tls/authelia.pem
+    key: /tls/authelia.key
   timeouts:
     read: 6s
     write: 6s
@@ -43,6 +48,10 @@ regulation:
 access_control:
   default_policy: deny
   rules:
+    # traefik asks authelia about EVERY request of the websecure entry point (default middleware), the login portal's own names included
+    - domain:
+        - 'auth.{{ cluster_domain }}'
+      policy: bypass
 {% for rule in authelia_access_rules %}
     - domain:
 {% for d in (rule.domain if rule.domain is not string else [rule.domain]) %}

@@ -33,3 +33,20 @@
   loop:
     - net.bridge.bridge-nf-call-iptables
     - net.bridge.bridge-nf-call-ip6tables
+
+# The bridge network for jobs that may reach the internet: `network { mode = "cni/egress" }`. The same as nomad's built-in bridge, on its
+# own bridge and subnet, so the firewall can tell the two apart. Nomad reads the networks when it starts (the nomad role restarts it when
+# the name or subnet in 40-client.hcl changes).
+- name: CNI config directory
+  ansible.builtin.file:
+    path: /opt/cni/config
+    state: directory
+    mode: "0755"
+
+- name: The network for containers with internet access
+  ansible.builtin.template:
+    src: egress.conflist.j2
+    dest: "/opt/cni/config/{{ cluster_egress_cni_name }}.conflist"
+    owner: root
+    group: root
+    mode: "0644"

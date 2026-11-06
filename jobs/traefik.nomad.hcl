@@ -62,6 +62,12 @@ variable "tls_resolver" {
   type    = string
   default = ""
 }
+# Fingerprint of the ingress certificates on the ingress nodes (internal CA mode; made by role cluster_tls, mounted from the node): a renewed
+# certificate changes the job and restarts it.
+variable "tls_fingerprint" {
+  type    = string
+  default = ""
+}
 variable "acme_server" {
   type    = string
   default = ""
@@ -91,8 +97,21 @@ job "traefik" {
       source    = "traefik"
     }
 
+    # the ingress certificate and key (internal CA mode) are made on the ingress node and mounted from it: the key never leaves the node
+    dynamic "volume" {
+      labels   = ["ingress-tls"]
+      for_each = var.tls_resolver == "" ? ["ingress-tls"] : []
+      content {
+        type      = "host"
+        read_only = true
+        source    = "ingress-tls"
+      }
+    }
+
     network {
-      mode = var.wireguard ? "bridge" : "host"
+      # host: no container network, no restriction. With wireguard the allocation has its own network: "cni/egress" (internet access, like
+      # the host network; nomad's plain "bridge" has none, see group_vars defaults.yml)
+      mode = var.wireguard ? "cni/egress" : "host"
       port "http" {
         static = 80
         to     = 80
@@ -238,7 +257,16 @@ EOT
         read_only   = false
       }
 
-      # the cluster CA (public): traefik verifies consul and nomad with it
+      dynamic "volume_mount" {
+        for_each = var.tls_resolver == "" ? ["ingress-tls"] : []
+        content {
+          volume      = "ingress-tls"
+          destination = "/tls"
+          read_only   = true
+        }
+      }
+
+      # the cluster CA (public): traefik verifies consul, nomad and authelia with it
       template {
         data        = <<EOT
 {{ with nomadVar "nomad/jobs/traefik" }}{{ .ca_cert }}{{ end }}
@@ -254,30 +282,8 @@ EOT
         perms       = "0600"
       }
 
-      # default certificate in "internal" mode (made on the node, nomad variable written by the cluster_jobs role); with an ACME
-      # resolver there is no such variable, so there is no such template either (it would wait for the variable forever)
-      dynamic "template" {
-        for_each = var.tls_resolver == "" ? ["ingress.pem"] : []
-        content {
-          data        = <<EOT
-{{ with nomadVar "nomad/jobs/traefik/traefik" }}{{ .ingress_cert }}{{ end }}
-EOT
-          destination = "secrets/ingress.pem"
-        }
-      }
-      dynamic "template" {
-        for_each = var.tls_resolver == "" ? ["ingress.key"] : []
-        content {
-          data        = <<EOT
-{{ with nomadVar "nomad/jobs/traefik/traefik" }}{{ .ingress_key }}{{ end }}
-EOT
-          destination = "secrets/ingress.key"
-          perms       = "0600"
-        }
-      }
-
       # nomad / consul / dashboard behind the authelia forward-auth (the middleware comes from authelia's service tags), TLS options,
-      # default certificate. Text: traefik/dynamic.yml.tpl
+      # default certificate (the files of the volume above). Text: traefik/dynamic.yml.tpl
       template {
         data        = file("${var.templates_dir}/dynamic.yml.tpl")
         destination = "secrets/dynamic/cluster.yml"
@@ -294,6 +300,7 @@ EOT
         TPL_TLS_RESOLVER = var.tls_resolver
         TPL_ACME_SERVER  = var.acme_server
         TPL_ACME_EMAIL   = var.acme_email
+        TLS_FINGERPRINT  = var.tls_fingerprint
       }
 
       config {

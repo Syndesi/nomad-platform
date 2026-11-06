@@ -7,4 +7,9 @@ client {
     path = "{{ cluster_authelia_dir }}"
     read_only = false
   }
+  # the server certificate of authelia (https, role cluster_tls): its key stays on the node
+  host_volume "authelia-tls" {
+    path = "{{ cluster_authelia_tls_dir }}"
+    read_only = true
+  }
 }

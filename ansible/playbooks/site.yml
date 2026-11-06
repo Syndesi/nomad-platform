@@ -58,6 +58,16 @@
       vars:
         cluster_ssh_key_type: "{{ (lookup('ansible.builtin.file', cluster_ssh_key_file ~ '.pub') | trim).split(' ')[0] }}"
 
+    - name: Authelia has a node to run on
+      ansible.builtin.assert:
+        that:
+          - cluster_authelia_hosts | length > 0
+          - cluster_authelia_hosts | difference(groups['cluster_clients'] | default([])) | length == 0
+        fail_msg: >-
+          cluster_authelia_hosts is {{ cluster_authelia_hosts }}: Authelia needs at least one node, and every one must be a Nomad client
+          (the default is the first node of the group cluster_ingress).
+        quiet: true
+
     - name: Wireguard for traefik is fully configured
       ansible.builtin.assert:
         that:
@@ -124,13 +134,13 @@
         fail_msg: "Run `task age:init`, `task pki:ca` and `task secrets:init` first."
         quiet: true
 
-    - name: Every access rule asks for the second factor, every user has a TOTP seed
+    - name: Every access rule asks for the second factor (or is an explicit bypass), every user has a TOTP seed
       ansible.builtin.assert:
         that:
-          - authelia_access_rules | rejectattr('policy', 'in', ['two_factor', 'deny']) | list | length == 0 or cluster_authelia_allow_weaker_policies | bool
+          - authelia_access_rules | rejectattr('policy', 'in', ['two_factor', 'deny', 'bypass']) | list | length == 0 or cluster_authelia_allow_weaker_policies | bool
           - authelia_users | difference((authelia_totp_seeds | default({})).keys() | list) | length == 0
         fail_msg: >-
-          Every authelia_access_rules entry must have policy two_factor or deny (cluster_authelia_allow_weaker_policies: true allows others), and every
+          Every authelia_access_rules entry must have policy two_factor, deny or bypass (a public route; first_factor alone needs cluster_authelia_allow_weaker_policies: true), and every
           user needs a TOTP seed: `task authelia:seed -- <user>` (users set with `task authelia:user` get one). No first factor alone anywhere.
         quiet: true
 
@@ -170,7 +180,7 @@
       Alpine: [ca-certificates, curl, htop, openssl, jq, chrony, logrotate, nftables]
     # nodes that run workloads: docker (nomad docker driver), the dns forwarder, cni plugins + iptables for bridge networking
     client_packages:
-      Debian: [docker.io, containernetworking-plugins, iptables]
+      Debian: [docker.io, containernetworking-plugins, iptables, dnsmasq-base]
       Alpine: [docker, dnsmasq, cni-plugins, iptables]
   tasks:
     - name: Facts
@@ -197,6 +207,21 @@
           (cluster_interface in host_vars/group_vars; interfaces here: {{ ansible_facts['interfaces'] | join(', ') }}).
         success_msg: "{{ inventory_hostname }}: cluster address {{ cluster_ip }} on {{ cluster_interface_effective }}"
         quiet: false
+
+    # The firewall trusts the whole subnet of this interface (cluster_subnets) and the agents bind to its address. The default, the
+    # interface of the default route, is the PUBLIC one on a VPS, and a provider subnet is shared with strangers. So the default is only
+    # accepted on a private address; anything else needs an explicit cluster_interface (a private network, wireguard, a dummy interface).
+    - name: The default cluster interface has a private address (RFC 1918 or CGNAT), or cluster_interface is set
+      ansible.builtin.assert:
+        that:
+          - (cluster_interface | default('', true)) != '' or cluster_ip is match(cluster_private_address_regex)
+        fail_msg: >-
+          {{ inventory_hostname }}: cluster_interface is not set, so the interface of the default route ({{ cluster_interface_effective }},
+          {{ cluster_ip }}) is the cluster network, and {{ cluster_ip }} is not a private address (10/8, 172.16/12, 192.168/16, 100.64/10).
+          A public subnet is shared with other customers of the provider and the firewall would trust all of it. Set cluster_interface
+          for this node (host_vars) to a private network or a wireguard / dummy interface (README, "Cluster network"); setting it to
+          this interface is a deliberate decision.
+        quiet: true
 
     - name: Access - authorized keys, hardened sshd
       ansible.builtin.include_role:

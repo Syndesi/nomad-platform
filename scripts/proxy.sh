@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The local proxy for command line tools that cannot do a web login (nomad, consul): a Caddy on 127.0.0.1 that sends their requests to
-# traefik's *-cli names with the authelia session cookie you got by logging in (password + TOTP, asked with gum). On the HOST, in the cluster
+# traefik's ops names with the authelia session cookie you got by logging in (password + TOTP, asked with gum). On the HOST, in the cluster
 # repo, via `task proxy:up|login|down|status|env`. State (Caddyfile, session cookie) lives in .proxy/ (git-ignored).
 #   proxy.sh up      render the config, start caddy
 #   proxy.sh login   ask for user, password and the TOTP code, log in through the proxy, give caddy the session, check it
@@ -8,8 +8,8 @@
 #   proxy.sh status  is caddy up, does the session work
 #   proxy.sh env     the environment for the cli tools (eval "$(task proxy:env)")
 # The uplink to traefik is TLS 1.3 with the hybrid post-quantum key exchange X25519MLKEM768 and nothing else (tls_curves; traefik's pq-only
-# option on the *-cli names accepts nothing else either): there is no downgrade in either direction.
-# Environment (all optional): PROXY_DOMAIN (default cluster_domain), PROXY_UPSTREAM (host:port to connect to instead of the *-cli names,
+# option pq-only accepts nothing else either): there is no downgrade in either direction.
+# Environment (all optional): PROXY_DOMAIN (default cluster_domain), PROXY_UPSTREAM (host:port to connect to instead of the ops names,
 # e.g. a tunnel; the names stay in SNI and Host), PROXY_CA_FILE (CA of traefik's certificates; default the cluster CA when the cluster uses
 # it), PROXY_NOMAD_PORT=4646, PROXY_CONSUL_PORT=8500, PROXY_AUTH_PORT=9091, PROXY_IMAGE.
 # Non-interactive login (tests): PROXY_USER, PROXY_PASSWORD, PROXY_TOTP.
@@ -37,7 +37,7 @@ render() {
   if [ -n "${PROXY_CA_FILE:-}" ]; then cp "$PROXY_CA_FILE" "$dir/ca.pem"; ca=1
   elif [ "$(tools 'cvar cluster_acme_ca')" = internal ]; then cp pki/ca.pem "$dir/ca.pem"; ca=1; fi
   [ -n "$ca" ] || : > "$dir/ca.pem"
-  up_n=${PROXY_UPSTREAM:-nomad-cli.$d}; up_c=${PROXY_UPSTREAM:-consul-cli.$d}; up_a=${PROXY_UPSTREAM:-auth-cli.$d}
+  up_n=${PROXY_UPSTREAM:-nomad.$d}; up_c=${PROXY_UPSTREAM:-consul.$d}; up_a=${PROXY_UPSTREAM:-auth.$d}
   trust=""; [ -n "$ca" ] && trust="tls_trusted_ca_certs /ca.pem"
   cat > "$dir/Caddyfile" <<CADDY
 {
@@ -50,11 +50,11 @@ render() {
 http://127.0.0.1:$nomad_port {
 	bind 127.0.0.1
 	reverse_proxy https://$up_n {
-		header_up Host nomad-cli.$d
+		header_up Host nomad.$d
 		header_up Cookie "authelia_session={file./session/authelia_session}"
 		transport http {
 			tls_curves x25519mlkem768
-			tls_server_name nomad-cli.$d
+			tls_server_name nomad.$d
 			$trust
 		}
 	}
@@ -63,11 +63,11 @@ http://127.0.0.1:$nomad_port {
 http://127.0.0.1:$consul_port {
 	bind 127.0.0.1
 	reverse_proxy https://$up_c {
-		header_up Host consul-cli.$d
+		header_up Host consul.$d
 		header_up Cookie "authelia_session={file./session/authelia_session}"
 		transport http {
 			tls_curves x25519mlkem768
-			tls_server_name consul-cli.$d
+			tls_server_name consul.$d
 			$trust
 		}
 	}
@@ -77,10 +77,10 @@ http://127.0.0.1:$consul_port {
 http://127.0.0.1:$auth_port {
 	bind 127.0.0.1
 	reverse_proxy https://$up_a {
-		header_up Host auth-cli.$d
+		header_up Host auth.$d
 		transport http {
 			tls_curves x25519mlkem768
-			tls_server_name auth-cli.$d
+			tls_server_name auth.$d
 			$trust
 		}
 	}
@@ -109,7 +109,7 @@ reload() { dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile --address
 login() {
   local d user pw code target auth hdr cookie fresh body
   for t in jq curl; do command -v "$t" >/dev/null || die "$t is needed"; done
-  d=$(domain); target="https://nomad-cli.$d/"; auth=http://127.0.0.1:$auth_port
+  d=$(domain); target="https://nomad.$d/"; auth=http://127.0.0.1:$auth_port
   if [ -n "${PROXY_USER:-}" ]; then user=$PROXY_USER; else command -v gum >/dev/null || die "gum is needed (or set PROXY_USER, PROXY_PASSWORD, PROXY_TOTP)"; user=$(gum input --placeholder "user"); fi
   if [ -n "${PROXY_PASSWORD:-}" ]; then pw=$PROXY_PASSWORD; else pw=$(gum input --password --placeholder "password"); fi
   [ -n "$user" ] && [ -n "$pw" ] || die "user and password are needed"

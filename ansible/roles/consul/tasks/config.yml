@@ -5,7 +5,10 @@
   ansible.builtin.file:
     path: "{{ consul_data_dir }}"
     state: directory
+    owner: "{{ cluster_consul_user }}"
+    group: "{{ cluster_consul_user }}"
     mode: "0750"
+    recurse: true # an agent that ran as root before leaves root-owned raft / serf files
 
 # One file per concern (00-base, 10-tls, 20-acl): other roles / inventory groups add their own
 # fragments next to these (e.g. a dedicated node with special capabilities) without touching them.
@@ -14,7 +17,7 @@
     src: "{{ item }}.j2"
     dest: "{{ consul_config_dir }}/{{ item }}"
     owner: root
-    group: root
+    group: "{{ cluster_consul_user }}"
     mode: "0640"
   loop: [00-base.hcl, 10-tls.hcl, 20-acl.hcl]
   register: consul_fragments
@@ -25,6 +28,7 @@
     tasks_from: extras
   vars:
     hashi_agent_name: consul
+    hashi_agent_group: "{{ cluster_consul_user }}"
     hashi_agent_config_dir: "{{ consul_config_dir }}"
     hashi_agent_extras_dir: "{{ cluster_consul_fragments_dir }}"
 

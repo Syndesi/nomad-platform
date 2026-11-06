@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+# {{ ansible_managed }}
+description="Cluster dns for containers without internet access"
+supervisor=supervise-daemon
+command=/usr/sbin/dnsmasq
+command_args="--keep-in-foreground --conf-file=/etc/cluster/dns-restricted.conf --pid-file="
+pidfile=/run/cluster-dns-restricted.pid
+
+depend() {
+	need net
+}

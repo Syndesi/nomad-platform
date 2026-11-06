@@ -1,6 +1,4 @@
 ---
 cluster_dns_consul_port: 8600
-# docker0 address: containers get it as their resolver, the host side answers there
-cluster_dns_docker_bridge_ip: 172.17.0.1
 # Where everything that is not *.consul goes. Default = the node's gateway (on a VPS the provider's, if it does not answer DNS: override).
 cluster_dns_upstreams: "{{ cluster_dns_upstreams_override | default([ansible_facts['default_ipv4']['gateway']]) }}"

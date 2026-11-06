@@ -60,6 +60,23 @@
   when: ansible_facts['service_mgr'] == 'openrc'
   register: hashi_agent_rc
 
+# the supervisor opens the log as the agent's user (logrotate keeps the file, copytruncate)
+- name: "{{ hashi_agent_name }}: log file of an unprivileged agent (OpenRC) exists"
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ hashi_agent_openrc_log }}"
+    force: false
+    mode: "0640"
+  when: ansible_facts['service_mgr'] == 'openrc' and hashi_agent_user != 'root'
+
+- name: "{{ hashi_agent_name }}: log file of an unprivileged agent (OpenRC) belongs to it"
+  ansible.builtin.file:
+    path: "{{ hashi_agent_openrc_log }}"
+    owner: "{{ hashi_agent_user }}"
+    group: "{{ hashi_agent_group }}"
+    mode: "0640"
+  when: ansible_facts['service_mgr'] == 'openrc' and hashi_agent_user != 'root'
+
 - name: "{{ hashi_agent_name }}: reload systemd"
   ansible.builtin.systemd:
     daemon_reload: true

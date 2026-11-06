@@ -97,6 +97,8 @@ cluster_reboot_allowed: false
 # address (service addresses, published ports of jobs) are bound to the address of this interface; the local http apis
 # also stay on 127.0.0.1. Nothing of the agents listens on 0.0.0.0 or on other interfaces.
 cluster_interface: ""
+# RFC 1918 and CGNAT (100.64.0.0/10): what the unset cluster_interface may default to (checked in playbooks/site.yml)
+cluster_private_address_regex: '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)'
 cluster_interface_effective: "{{ cluster_interface | default('', true) or ansible_facts['default_ipv4']['interface'] }}"
 cluster_ip: "{{ ansible_facts[cluster_interface_effective | regex_replace('[^a-zA-Z0-9_]', '_')]['ipv4']['address'] }}"
 # the subnet of that interface (network/prefix); the firewall opens the cluster ports to it, traefik's wireguard sidecar keeps it direct
@@ -107,6 +109,9 @@ cluster_subnets: >-
 # Names that mean "this node" for jobs: every node resolves them to its own cluster address (an /etc/hosts block, served to the host and
 # to containers by the node's resolver), so a job that must reach the local Nomad / Consul api (https, ports 4646 / 8501) does not need
 # to know where it runs. Not localhost: inside a container that is the container. They are also names in the node's tls certificate.
+# The unprivileged account of the consul agent (nomad runs as root: its clients start containers and mount volumes)
+cluster_consul_user: consul
+
 cluster_host_names: [host.internal, nomad.host.internal, consul.host.internal]
 
 # --- firewall -------------------------------------------------------------------------------------
@@ -123,12 +128,35 @@ cluster_docker_volumes_enabled: false
 #   cluster_docker_daemon_extra: { runtimes: { nvidia: { path: nvidia-container-runtime, args: [] } } }
 cluster_docker_daemon_extra: {}
 
+# --- container networks / egress ------------------------------------------------------------------------
+# Containers have NO access to the internet by default: the firewall rejects new connections from the container bridges to anything outside
+# the cluster and the container networks, and their dns (172.17.0.1, docker's `dns`) answers *.consul and this node's names only.
+# A job that needs the internet runs in the second bridge network: `network { mode = "cni/egress" }` (a Consul Connect sidecar works there too).
+# Containers on that bridge may reach everything and get the full resolver. Jobs with `mode = "host"` are not containers on a bridge:
+# the firewall does not restrict them. (Needs cluster_firewall_enabled.)
+cluster_docker_bridge_subnet: 172.17.0.0/16
+# docker0's address: the containers get it as their resolver (docker's `dns`); the restricted resolver answers there
+cluster_dns_docker_bridge_ip: 172.17.0.1
+# nomad's built-in bridge (mode = "bridge"), set in the client config
+cluster_nomad_bridge_subnet: 172.26.64.0/20
+# the network "egress"; the bridge name must start with br- (the firewall's bridge list). The ip is the first address of the subnet.
+cluster_egress_cni_name: egress
+cluster_egress_bridge: br-egress
+cluster_egress_bridge_subnet: 172.26.80.0/20
+cluster_egress_bridge_ip: 172.26.80.1
+
 # --- authelia ---------------------------------------------------------------------------------------
 # Authelia keeps its sqlite database (second factors, devices, bans) in a plain folder on the node it runs on, offered to nomad as the host
 # volume "authelia" (fragment 55-authelia.hcl) and used by the job through a constraint on the client meta authelia = true. It runs on the
-# nodes in cluster_authelia_hosts, the servers by default. The folder is part of `task backup`.
-cluster_authelia_hosts: "{{ groups['cluster_servers'] | default([]) }}"
+# node in cluster_authelia_hosts: the first ingress node by default, so Authelia runs next to traefik (its forward-auth is one hop on the
+# same host) and keeps one database. It must be a client. The folder is part of `task backup`.
+cluster_authelia_hosts: "{{ (groups['cluster_ingress'] | default([]))[:1] }}"
 cluster_authelia_dir: /srv/authelia
+# Certificates that a JOB mounts from the node as a read-only host volume (the key never leaves the node): authelia's own server
+# certificate (forward-auth is https) on the nodes in cluster_authelia_hosts, the ingress wildcard on the ingress nodes (internal CA mode).
+# One directory each, so a job sees only its own key.
+cluster_authelia_tls_dir: /etc/cluster/tls-authelia
+cluster_ingress_tls_dir: /etc/cluster/tls-ingress
 # authelia sessions (in memory): a session ends after `inactivity` without a request or `expiration` after the login; "remember me" lengthens it
 authelia_session_inactivity: 168h # 7 days without a request end the session
 authelia_session_expiration: 168h # 7 days after the login the session ends whatever happened in between

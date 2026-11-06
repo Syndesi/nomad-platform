@@ -1,25 +1,38 @@
 ---
 # The default jobs (authelia, traefik), run on the first server with plain `nomad job run -var-file`:
 # the job files in jobs/ are ordinary HCL2 and can be run by hand the same way. Their variables are
-# nomad variables (tofu-nomad), except the ingress key, which was made on this node and goes from
-# the node's tls dir into a nomad variable here.
-- name: Ingress certificate and key (made on this node) as nomad variable
-  when: cluster_acme_ca == 'internal'
-  block:
-    - name: Read the ingress files
-      ansible.builtin.slurp:
-        src: "{{ cluster_tls_dir }}/{{ item }}"
-      loop: [ingress.pem, ingress.key]
-      register: cluster_jobs_ingress
-      no_log: true
+# nomad variables (tofu-nomad).
+# The certificates the jobs mount from the nodes (authelia's server certificate, the ingress wildcard) are made on those nodes and never
+# leave them. The jobs only get their fingerprint: authelia and traefik read the files when they start, so a renewed certificate has to
+# change the job to restart it.
+- name: Fingerprints of the certificates the jobs mount from the nodes
+  ansible.builtin.command: openssl x509 -noout -fingerprint -sha256 -in {{ item.dir }}/{{ item.name }}.pem
+  delegate_to: "{{ item.host }}"
+  loop: >-
+    {{ (cluster_authelia_hosts | intersect(groups['cluster_clients'] | default([]))
+          | map('community.general.dict_kv', 'host') | map('combine', {'dir': cluster_authelia_tls_dir, 'name': 'authelia', 'job': 'authelia'}) | list)
+       + ((groups['cluster_ingress'] | default([]))
+          | map('community.general.dict_kv', 'host') | map('combine', {'dir': cluster_ingress_tls_dir, 'name': 'ingress', 'job': 'traefik'}) | list
+          if cluster_acme_ca == 'internal' else []) }}
+  loop_control:
+    label: "{{ item.name }} on {{ item.host }}"
+  register: cluster_jobs_fingerprints
+  changed_when: false
 
-    - name: Nomad variable with them
-      ansible.builtin.include_tasks: variable.yml
-      vars:
-        cluster_jobs_var_path: nomad/jobs/traefik/traefik
-        cluster_jobs_var_items:
-          ingress_cert: "{{ cluster_jobs_ingress.results[0].content | b64decode }}"
-          ingress_key: "{{ cluster_jobs_ingress.results[1].content | b64decode }}"
+# an earlier version copied the ingress key into this nomad variable (Raft, snapshots, readable with the deployer token)
+- name: The old nomad variable with the ingress key, still there?
+  ansible.builtin.command: nomad var get -out json nomad/jobs/traefik/traefik
+  environment: "{{ cluster_jobs_env }}"
+  register: cluster_jobs_old_var
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: The old nomad variable with the ingress key is purged
+  ansible.builtin.command: nomad var purge nomad/jobs/traefik/traefik
+  environment: "{{ cluster_jobs_env }}"
+  when: cluster_jobs_old_var.rc == 0
+  changed_when: true
 
 # the wg-quick config (private key inside) from the sops secret; only the wireguard task of the job can read this path
 - name: Wireguard config as nomad variable (task wireguard:conf)

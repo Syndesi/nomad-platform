@@ -26,8 +26,7 @@ RUN ansible-galaxy collection install -p /opt/ansible/collections -r /tmp/requir
  && rm /tmp/requirements.yml
 
 # The container runs as the host user (compose `user:`), whose uid has no passwd entry; ssh refuses to run without one.
-# The entrypoint adds the entry at container start, so /etc/passwd must be writable.
-RUN chmod 666 /etc/passwd
+# compose mounts a read-only /etc/passwd with that entry (the `passwd` config in compose.yml): the file stays root-owned and 644 here.
 COPY tools/entrypoint.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # The compose service keeps this shell alive with tty + stdin_open (the `docker run -it` idiom); `docker compose exec` is used for the work.

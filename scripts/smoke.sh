@@ -30,12 +30,11 @@ check "consul: workload identity registered the services" "consul catalog servic
 for h in nomad consul traefik; do
   check "ingress: $h.$domain asks for a login (302)" "curl -sk -o /dev/null -w '%{http_code}' --resolve $h.$domain:443:127.0.0.1 https://$h.$domain/" 302
 done
-# the names of the local proxy accept the hybrid post-quantum key exchange and nothing else; the browser names still take a classical one
-for h in nomad-cli consul-cli auth-cli; do
+# the ops names accept the hybrid post-quantum key exchange and nothing else
+for h in nomad consul traefik auth; do
   check "ingress: $h.$domain takes X25519MLKEM768"  "echo | openssl s_client -connect 127.0.0.1:443 -servername $h.$domain -tls1_3 -groups X25519MLKEM768 >/dev/null 2>&1 && echo accepted || echo refused" accepted
   check "ingress: $h.$domain refuses X25519 alone"  "echo | openssl s_client -connect 127.0.0.1:443 -servername $h.$domain -tls1_3 -groups X25519 >/dev/null 2>&1 && echo accepted || echo refused" refused
 done
-check "ingress: nomad.$domain still takes X25519"   "echo | openssl s_client -connect 127.0.0.1:443 -servername nomad.$domain -tls1_3 -groups X25519 >/dev/null 2>&1 && echo accepted || echo refused" accepted
 check "ingress: auth.$domain answers"         "curl -sk -o /dev/null -w '%{http_code}' --resolve auth.$domain:443:127.0.0.1 https://auth.$domain/" 200
 if [ "$(cvar cluster_acme_ca)" = internal ]; then
   check "ingress cert is from the cluster CA"   "echo | openssl s_client -connect 127.0.0.1:443 -servername nomad.$domain 2>/dev/null | openssl x509 -noout -issuer | grep -c 'CN *= *.* cluster CA'" 1
@@ -69,6 +68,15 @@ if [ "$(cvar cluster_firewall_enabled)" = True ] || [ "$(cvar cluster_firewall_e
   done
 fi
 
+# containers' network rules and resolvers on the clients: the forward chain rejects new connections from the bridges (not the egress bridge),
+# the nat chain redirects the egress bridge's queries, the restricted resolver runs
+if [ "$(cvar cluster_firewall_enabled)" = True ] || [ "$(cvar cluster_firewall_enabled)" = true ]; then
+  for n in $(inventory_group cluster_clients | sort -u); do
+    root_check "egress rules on $n: bridges rejected, egress bridge open, dns redirect" "$n" "{ nft list chain inet cluster forward | grep -q 'reject with icmp admin-prohibited' && nft list chain inet cluster forward | grep -q 'iifname \"br-egress\" accept' && [ \$(nft list chain inet cluster container_dns | grep -c dnat) = 2 ]; } && echo ok" ok
+    root_check "restricted resolver on $n: running, forwards only .consul" "$n" "{ pgrep -f '[d]ns-restricted.conf' >/dev/null && [ \$(grep -c '^server=' /etc/cluster/dns-restricted.conf) = 1 ] && grep -q '^local=/#/' /etc/cluster/dns-restricted.conf; } && echo ok" ok
+  done
+fi
+
 # ssh: the nodes must refuse root, passwords and every algorithm outside the restricted set (the controller's client
 # config is the reference). Checked from here, so this is what an attacker with network access would see.
 ssh_cfg=${CLUSTER_RUN_DIR:-/dev/shm/cluster}/ssh_config
@@ -87,6 +95,46 @@ for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; 
     printf 'FAIL  ssh on %s: the ansible user cannot log in\n' "$n"; fail=1
   fi
 done
+
+# containers: no internet and no public dns by default (*.consul and the node's names work); the network egress (cni/egress) has both.
+# One container of each kind on every client node.
+mt=$("$BASE/scripts/secrets.sh" get cluster_consul_management_token)
+nm=$("$BASE/scripts/secrets.sh" get cluster_nomad_management_token)
+mgmt() { cluster_exec "$server" env "NOMAD_TOKEN=$nm" "CONSUL_HTTP_TOKEN=$mt" sh -lc "$1"; }
+echo "-- container networks (bridge: closed, cni/egress: open) and their dns"
+mgmt "cat > /tmp/network.nomad.hcl" < "$BASE/tests/network.nomad.hcl"
+if mgmt "nomad job run -var datacenter=$(cvar cluster_datacenter) -var clients=$clients /tmp/network.nomad.hcl" >/tmp/network-run.log 2>&1; then
+  echo "ok    network-test deployed: a container of each kind on every client"
+  in_alloc() { mgmt "nomad alloc exec -task t $1 sh -c \"$2 >/dev/null 2>&1 && echo yes || echo no\"" 2>&1 | tail -1; }
+  check_alloc() { # <description> <alloc> <command in the container> <expected: yes|no>
+    local got; got=$(in_alloc "$2" "$3")
+    if [ "$got" = "$4" ]; then echo "ok    $1"; else echo "FAIL  $1 (got: $got, wanted: $4)"; fail=1; fi
+  }
+  online=$(mgmt "curl -s -m 5 -o /dev/null -w '%{http_code}' http://1.1.1.1 || true")
+  for g in bridge egress; do
+    ids=$(mgmt "nomad job allocs -json network-test | jq -r '.[]|select(.TaskGroup==\"$g\" and .ClientStatus==\"running\")|.ID'")
+    [ "$(printf '%s\n' "$ids" | grep -c .)" = "$clients" ] || { echo "FAIL  network-test: $g runs on $(printf '%s\n' "$ids" | grep -c .) of $clients clients"; fail=1; }
+    for id in $ids; do
+      node=$(mgmt "nomad alloc status -json $id | jq -r .NodeName")
+      p="container ($g) on $node"
+      check_alloc "$p: resolves authelia.service.consul"   "$id" "nslookup authelia.service.consul"   yes
+      check_alloc "$p: resolves host.internal"                       "$id" "nslookup host.internal"           yes
+      check_alloc "$p: has no global ipv6 address"                   "$id" "! ip -6 addr show scope global | grep -q inet6" yes
+      if [ "$g" = bridge ]; then
+        check_alloc "$p: public dns is refused"                      "$id" "nslookup example.com"             no
+        check_alloc "$p: no internet"                                "$id" "wget -q -T 3 -O /dev/null http://1.1.1.1" no
+      elif [ "$online" != 000 ]; then
+        check_alloc "$p: public dns works"                           "$id" "nslookup example.com"             yes
+        check_alloc "$p: internet works"                             "$id" "wget -q -T 5 -O /dev/null http://1.1.1.1" yes
+      else
+        echo "skip  $p: the node is offline, no internet checks"
+      fi
+    done
+  done
+else
+  echo "FAIL  network-test deploy"; tail -15 /tmp/network-run.log; fail=1
+fi
+mgmt "nomad job stop -purge network-test >/dev/null; rm -f /tmp/network.nomad.hcl; true"
 
 if [ "${1:-}" = connect ]; then
   echo "-- consul connect (envoy sidecars through the cni bridge)"

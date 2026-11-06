@@ -4,9 +4,15 @@
 cluster_pki_force: false
 cluster_pki_extra_sans: []
 
+# The names every key may carry. Each daemon has its OWN key and certificate with only its own names: the consul agent runs as an
+# unprivileged user and holds consul.key, so it cannot pose as a nomad server (and nomad's key is not readable by it).
+cluster_tls_base_dns_sans: "{{ [cluster_node_fqdn, inventory_hostname, 'localhost'] + cluster_host_names + cluster_pki_extra_sans }}"
+cluster_tls_consul_dns_sans: >-
+  {{ cluster_tls_base_dns_sans
+     + (['server.' ~ cluster_datacenter ~ '.consul'] if inventory_hostname in groups['cluster_servers'] | default([]) else []) }}
 cluster_tls_node_dns_sans: >-
   {{ [cluster_node_fqdn, inventory_hostname, 'localhost']
-     + ((['server.' ~ cluster_region ~ '.nomad', 'server.' ~ cluster_datacenter ~ '.consul'])
+     + ((['server.' ~ cluster_region ~ '.nomad'])
         if inventory_hostname in groups['cluster_servers'] | default([]) else [])
      + ((['client.' ~ cluster_region ~ '.nomad'])
         if inventory_hostname in groups['cluster_clients'] | default([]) else [])
@@ -14,8 +20,12 @@ cluster_tls_node_dns_sans: >-
      + cluster_pki_extra_sans }}
 
 # subjectAltName value of the node cert: names + 127.0.0.1 (the tofu tunnel and local clients connect there) + the cluster address
+cluster_tls_consul_sans: "{{ (cluster_tls_consul_dns_sans | unique | map('regex_replace', '^', 'DNS:') | list + ['IP:127.0.0.1', 'IP:' ~ cluster_ip]) | join(',') }}"
 cluster_tls_node_sans: "{{ (cluster_tls_node_dns_sans | map('regex_replace', '^', 'DNS:') | list + ['IP:127.0.0.1', 'IP:' ~ cluster_ip]) | join(',') }}"
 
 # Wildcard cert for the ingress (traefik, internal CA mode). Its key lives on the ingress node(s).
 cluster_tls_ingress: "{{ cluster_acme_ca == 'internal' and inventory_hostname in groups['cluster_ingress'] | default([]) }}"
+cluster_tls_authelia: "{{ inventory_hostname in cluster_authelia_hosts and inventory_hostname in groups['cluster_clients'] | default([]) }}"
+# traefik calls authelia at https://<cluster address>:9091
+cluster_tls_authelia_sans: "DNS:{{ cluster_node_fqdn }},DNS:{{ inventory_hostname }},DNS:authelia.service.consul,IP:127.0.0.1,IP:{{ cluster_ip }}"
 cluster_tls_ingress_sans: "DNS:*.{{ cluster_domain }},DNS:{{ cluster_domain }}"

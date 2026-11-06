@@ -2,48 +2,33 @@
 {{- $host := "127.0.0.1" }}{{ if eq (env "TPL_WIREGUARD") "true" }}{{ $host = env "NOMAD_HOST_IP_https" }}{{ end }}
 http:
   routers:
-    # Nomad: everything goes through authelia. A request that brings a nomad token of its own (X-Nomad-Token header) is passed on as it is;
+    # The ops names (nomad, consul, traefik, and authelia's portal) accept the hybrid post-quantum key exchange and nothing else (tls option pq-only);
+    # a client without it (an old browser) cannot open them. Apps keep the default option.
+    # Nomad: everything goes through authelia (the default middleware of the websecure entry point, static.yml.tpl). A request that brings a nomad token of its own (X-Nomad-Token header) is passed on as it is;
     # one without gets the read-only token of the "ui" policy (nodes and jobs) added, so the web ui can look without a nomad login.
     nomad:
       entryPoints: [websecure]
-      middlewares: [authelia@consulcatalog]
       service: nomad
       rule: Host(`nomad.{{ env "TPL_DOMAIN" }}`) && HeaderRegexp(`X-Nomad-Token`, `.+`)
       priority: 200
-      tls: { {{ with $resolver }}certResolver: {{ . }}{{ end }} }
+      tls: { options: pq-only{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
     nomad-ui:
       entryPoints: [websecure]
-      middlewares: [authelia@consulcatalog, nomad-ui-token]
+      middlewares: [nomad-ui-token]
       service: nomad
       rule: Host(`nomad.{{ env "TPL_DOMAIN" }}`)
       priority: 100
-      tls: { {{ with $resolver }}certResolver: {{ . }}{{ end }} }
+      tls: { options: pq-only{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
     consul:
       entryPoints: [websecure]
-      middlewares: [authelia@consulcatalog]
       service: consul
       rule: Host(`consul.{{ env "TPL_DOMAIN" }}`)
-      tls: { {{ with $resolver }}certResolver: {{ . }}{{ end }} }
-    # The names of the local proxy (`task proxy:up`): same services behind the same authelia login, but a hybrid post-quantum key exchange
-    # is the ONLY one accepted (tls option pq-only). No web ui token: a cli request brings the token of its own.
-    nomad-cli:
-      entryPoints: [websecure]
-      middlewares: [authelia@consulcatalog]
-      service: nomad
-      rule: Host(`nomad-cli.{{ env "TPL_DOMAIN" }}`)
-      tls: { options: pq-only{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
-    consul-cli:
-      entryPoints: [websecure]
-      middlewares: [authelia@consulcatalog]
-      service: consul
-      rule: Host(`consul-cli.{{ env "TPL_DOMAIN" }}`)
       tls: { options: pq-only{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
     traefik:
       entryPoints: [websecure]
-      middlewares: [authelia@consulcatalog]
       service: api@internal
       rule: Host(`traefik.{{ env "TPL_DOMAIN" }}`)
-      tls: { {{ with $resolver }}certResolver: {{ . }}{{ end }} }
+      tls: { options: pq-only{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
   middlewares:
     nomad-ui-token:
       headers:
@@ -71,7 +56,7 @@ tls:
     default:
       # TLS 1.3 only (its cipher suites are fixed, there is nothing to list)
       minVersion: VersionTLS13
-    # the local proxy's uplink: only the hybrid post-quantum key exchange (X25519 + ML-KEM-768); a client without it cannot connect
+    # the ops names: only the hybrid post-quantum key exchange (X25519 + ML-KEM-768); a client without it cannot connect
     pq-only:
       minVersion: VersionTLS13
       curvePreferences:
@@ -80,6 +65,6 @@ tls:
   stores:
     default:
       defaultCertificate:
-        certFile: /secrets/ingress.pem
-        keyFile: /secrets/ingress.key
+        certFile: /tls/ingress.pem
+        keyFile: /tls/ingress.key
 {{- end }}

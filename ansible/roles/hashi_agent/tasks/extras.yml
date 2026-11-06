@@ -9,7 +9,7 @@
     src: "{{ item }}"
     dest: "{{ hashi_agent_config_dir }}/{{ item | basename | regex_replace('[.]j2$', '') }}"
     owner: root
-    group: root
+    group: "{{ hashi_agent_group }}"
     mode: "0640"
   loop: "{{ query('ansible.builtin.fileglob', hashi_agent_extras_dir ~ '/[6-9][0-9]-*.hcl.j2') | sort }}"
   loop_control:

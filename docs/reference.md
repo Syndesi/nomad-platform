@@ -5,7 +5,8 @@ Details behind the [README](../README.md) and the [cluster guide](../cluster-tem
 
 ## Network: where the cluster listens
 
-`cluster_interface` names the interface of the cluster-internal network (default: the interface of the default route; set it per node
+`cluster_interface` names the interface of the cluster-internal network (default: the interface of the default route, accepted only with a private
+address (RFC 1918 or CGNAT), otherwise the deploy stops; set it per node
 in `inventory/host_vars/<node>.yml`). Nomad (rpc, serf, http), Consul (rpc, serf) and the Nomad client use the address of that
 interface; the local http apis also stay on `127.0.0.1`. Nothing of the agents listens on `0.0.0.0`. The node certificates contain
 the address, the firewall opens the cluster ports to the interface's subnet. `task deploy:ansible` stops when the interface is missing.
@@ -40,11 +41,14 @@ proxy that logs in through Authelia (`task proxy:up|login|status|env|down`). `ta
 
 ## Authelia: second factor
 
-Every access rule must be `two_factor` (or `deny`); the deploy refuses anything else and users without a TOTP seed. `task authelia:user
+Traefik asks Authelia about **every** request on `websecure` (a default middleware of the entry point): a job that forgets the middleware
+is not public, a domain without an access rule is denied. A job that really is public gets an access rule with `policy: bypass` for its
+domain in `authelia_access_rules` (first match wins: put it after the rules of the infrastructure). Every other rule must be `two_factor`
+(or `deny`); the deploy refuses anything else and users without a TOTP seed. `task authelia:user
 -- <name>` asks for a password (twice, or from stdin) and stores its argon2id hash and a generated TOTP seed sops-encrypted. The deploy
 registers the seeds in Authelia and writes the otpauth URI to `secrets/authelia/totp-<name>.txt` (git-ignored): put it into an
 authenticator app. The seed is the truth, so a lost database is repaired by the next deploy. The sqlite database lives in the host volume
-`authelia` (`/srv/authelia` on the nodes in `cluster_authelia_hosts`, the servers by default) and is part of `task backup`. The job has
+`authelia` (`/srv/authelia` on the nodes in `cluster_authelia_hosts`, the first ingress node by default) and is part of `task backup`. The job has
 `auto_revert = false` on purpose (a failed upgrade may already have migrated the database). Sessions: 7 days without a request, 7 days
 at most after the login (`authelia_session_*`).
 
@@ -56,6 +60,19 @@ and Consul ports from the cluster subnet only, 80/443 on ingress nodes, and from
 still apply; `cluster_firewall_bridge_tcp_ports` / `_udp_ports`). A forward chain drops everything that docker/nomad publish (nat) for sources outside the cluster
 and the bridges, except the public ports (80/443 on ingress nodes): a port published by a job is cluster-only unless you open it. Own rules:
 `cluster_firewall_extra_rules` (raw nft). Rules are checked with `nft -c` first. `task smoke` checks the table.
+
+## Containers and the internet
+
+Containers have **no internet access by default**, and no public dns either. The firewall rejects new connections from the container bridges
+(`docker0`, Nomad's `bridge`) to anything outside the cluster and the container networks, and the resolver they are given (docker0, 172.17.0.1)
+is a restricted dnsmasq per node: `*.consul` and the node's own names (`host.internal`, ...), every other name gets NXDOMAIN.
+
+A job that needs the internet runs in the second bridge network, `network { mode = "cni/egress" }` (own bridge `br-egress`, own subnet;
+Consul Connect sidecars work in it too). Its containers may connect anywhere and are sent to the full resolver (the node's dnsmasq on Alpine, a
+second dnsmasq in front of systemd-resolved on Ubuntu; a firewall nat rule redirects their queries). Not affected: jobs with `mode = "host"`
+(Traefik without WireGuard, Authelia) have no container network, and Traefik behind WireGuard uses `cni/egress`. Nomad and Consul run on the host.
+Names and subnets: `cluster_egress_*`, `cluster_nomad_bridge_subnet`, `cluster_docker_bridge_subnet`; destinations that stay reachable for everyone:
+`cluster_firewall_container_destinations`. Everything needs `cluster_firewall_enabled`. IPv6 from containers is rejected as well.
 
 ## Access: ssh
 

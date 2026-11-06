@@ -3,6 +3,9 @@
 #   ubuntu: systemd-resolved forwards ~consul to the local consul dns port and also listens on docker0
 #   alpine: dnsmasq forwards consul to the local dns port, everything else upstream, listens on docker0
 # docker gets `dns: [docker0 ip]` on both. Pattern taken from the previous deployments.
+# Containers have no internet by default (see the firewall), and neither does their dns: the address docker hands out (docker0) is answered by a
+# RESTRICTED resolver (a dnsmasq: *.consul and this node's names only). The containers of the network "egress" are sent to the full resolver at
+# the egress bridge's address by a firewall rule (nat). That one is the node's dnsmasq on alpine and a second dnsmasq in front of systemd-resolved on ubuntu.
 - name: Docker config directory
   ansible.builtin.file:
     path: /etc/docker
@@ -18,7 +21,23 @@
     mode: "0644"
   register: cluster_dns_docker
 
+- name: Directory of the resolver configs
+  ansible.builtin.file:
+    path: /etc/cluster
+    state: directory
+    mode: "0755"
+
+- name: Restricted resolver config (containers without internet access)
+  ansible.builtin.template:
+    src: dns-restricted.conf.j2
+    dest: /etc/cluster/dns-restricted.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: cluster_dns_restricted
+
 - name: Ubuntu - systemd-resolved
+
   when: ansible_facts['os_family'] == 'Debian'
   block:
     - name: resolved drop-in directory
@@ -27,8 +46,8 @@
         state: directory
         mode: "0755"
 
-    # one file (each file is a round trip to the node): consul zone + the extra listener on docker0
-    - name: consul + docker0 drop-in
+    # one file (each file is a round trip to the node): the consul zone. The containers' resolvers are the two dnsmasq below.
+    - name: consul drop-in
       ansible.builtin.copy:
         dest: /etc/systemd/resolved.conf.d/cluster.conf
         content: |
@@ -37,7 +56,6 @@
           DNSSEC=no
           Domains=~consul.
           DNSStubListener=yes
-          DNSStubListenerExtra={{ cluster_dns_docker_bridge_ip }}
         owner: root
         group: root
         mode: "0644"
@@ -48,6 +66,39 @@
         name: systemd-resolved
         state: restarted
       when: cluster_dns_resolved.changed
+
+    - name: Full resolver config for the network "egress"
+      ansible.builtin.template:
+        src: dns-egress.conf.j2
+        dest: /etc/cluster/dns-egress.conf
+        owner: root
+        group: root
+        mode: "0644"
+      register: cluster_dns_egress
+
+    - name: systemd unit of the resolvers
+      ansible.builtin.template:
+        src: cluster-dns@.service.j2
+        dest: /etc/systemd/system/cluster-dns@.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: cluster_dns_unit
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: cluster_dns_unit.changed
+
+    # restricted: docker0's address (a restart of resolved frees it if it still listened there); egress: the egress bridge's address
+    - name: The resolvers run
+      ansible.builtin.systemd:
+        name: "cluster-dns@{{ item.name }}"
+        enabled: true
+        state: "{{ 'restarted' if (item.changed or cluster_dns_unit.changed or cluster_dns_resolved.changed) else 'started' }}"
+      loop:
+        - { name: restricted, changed: "{{ cluster_dns_restricted.changed }}" }
+        - { name: egress, changed: "{{ cluster_dns_egress.changed }}" }
 
 - name: Alpine - dnsmasq
   when: ansible_facts['os_family'] == 'Alpine'
@@ -70,8 +121,9 @@
           {% for u in cluster_dns_upstreams %}
           server={{ u }}
           {% endfor %}
-          # host + docker0 (docker0 may appear after dnsmasq started)
-          listen-address=127.0.0.1,{{ cluster_dns_docker_bridge_ip }}
+          # the host, and the egress bridge (its address appears when nomad creates the network, after dnsmasq started). docker0 belongs to
+          # the restricted resolver below.
+          listen-address=127.0.0.1,{{ cluster_egress_bridge_ip }}
           bind-dynamic
         owner: root
         group: root
@@ -97,12 +149,22 @@
         mode: "0644"
       register: cluster_dns_dhcpcd
 
+    # dhcpcd also configures the containers' veth interfaces (it asks for leases on them and takes them over): it has no business there
+    - name: dhcpcd leaves the container interfaces alone
+      ansible.builtin.lineinfile:
+        path: /etc/dhcpcd.conf
+        regexp: '^#?\s*denyinterfaces\s'
+        line: "denyinterfaces veth* docker* br-* nomad*"
+        create: true
+        mode: "0644"
+      register: cluster_dns_dhcpcd_deny
+
     # a running dhcpcd only reads its config at start: without this it overwrites resolv.conf at the next lease renewal
     - name: dhcpcd restarts to read it (same lease, the address stays)
       ansible.builtin.service:
         name: dhcpcd
         state: restarted
-      when: cluster_dns_dhcpcd is changed
+      when: cluster_dns_dhcpcd is changed or cluster_dns_dhcpcd_deny is changed
 
     - name: resolv.conf points at the local dnsmasq
       ansible.builtin.copy:
@@ -118,7 +180,22 @@
         enabled: true
         state: "{{ 'restarted' if (cluster_dns_dnsmasq.changed or cluster_dns_conf_dir.changed) else 'started' }}"
 
-# the resolvers of both families serve /etc/hosts to the host and to containers (docker0): the same name is the local node everywhere
+    - name: OpenRC service of the restricted resolver
+      ansible.builtin.template:
+        src: cluster-dns-restricted.openrc.j2
+        dest: /etc/init.d/cluster-dns-restricted
+        owner: root
+        group: root
+        mode: "0755"
+      register: cluster_dns_openrc
+
+    - name: The restricted resolver runs
+      ansible.builtin.service:
+        name: cluster-dns-restricted
+        enabled: true
+        state: "{{ 'restarted' if (cluster_dns_restricted.changed or cluster_dns_openrc.changed or cluster_dns_dnsmasq.changed) else 'started' }}"
+
+# the resolvers serve /etc/hosts to the host and to containers: the same name is the local node everywhere
 - name: Names of this node (cluster_host_names) in /etc/hosts
   ansible.builtin.blockinfile:
     path: /etc/hosts
@@ -126,9 +203,11 @@
     block: "{{ cluster_ip }} {{ cluster_host_names | join(' ') }}"
   register: cluster_dns_hosts
 
-- name: dnsmasq re-reads /etc/hosts
+- name: The dnsmasq instances re-read /etc/hosts
   ansible.builtin.command: pkill -HUP dnsmasq
-  when: cluster_dns_hosts is changed and ansible_facts['os_family'] != 'Debian'
+  register: cluster_dns_hup
+  failed_when: cluster_dns_hup.rc not in [0, 1]
+  when: cluster_dns_hosts is changed
   changed_when: true
 
 - name: Restart docker so containers get the new resolver

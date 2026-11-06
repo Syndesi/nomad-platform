@@ -9,6 +9,9 @@ description="{{ hashi_agent_description }}"
 supervisor="supervise-daemon"
 command="{{ hashi_agent_bin_dir }}/{{ hashi_agent_name }}"
 command_args="{{ hashi_agent_args }}"
+{% if hashi_agent_user != 'root' %}
+command_user="{{ hashi_agent_user }}:{{ hashi_agent_group }}"
+{% endif %}
 output_log="{{ hashi_agent_openrc_log }}"
 error_log="{{ hashi_agent_openrc_log }}"
 respawn_delay={{ hashi_agent_restart_delay }}

@@ -24,7 +24,7 @@ You need `docker`, `git`, [`task`](https://taskfile.dev) and [`gum`](https://git
 |---|---|
 | `.env` | `CLUSTER_NAME` and `COMPOSE_PROJECT_NAME` (same value, lower case). Binary cache: `ARTIFACTS_DIR` (default `~/.cache/nomad-platform/artifacts`, shared by all clusters). No `${HOME}` in this file |
 | `inventory/group_vars/all/cluster.yml` | `cluster_name`, `cluster_domain`, `cluster_acme_email`, `cluster_acme_ca`, `cluster_ssh_authorized_keys` (your own public ssh keys) |
-| `inventory/group_vars/all/authelia.yml` | users (name, mail, groups) and which group may open which UI; every rule must be `two_factor` |
+| `inventory/group_vars/all/authelia.yml` | users (name, mail, groups) and which group may open which domain; every rule must be `two_factor`, `deny` or an explicit `bypass` (public route) |
 | `inventory/20-static.yml` | the nodes: `ansible_host`, OS group (`alpine` / `ubuntu`), roles (`cluster_servers`, `cluster_clients`, `cluster_ingress`) |
 | `inventory/host_vars/<node>.yml` | per node: `cluster_interface`, `cluster_host_volumes`, ... |
 
@@ -47,8 +47,7 @@ all:
 
 `inventory/host_vars/vps1.yml`: `cluster_interface: cluster0` (created in step 3).
 
-**DNS records** (at your DNS provider, pointing at the ingress node): `auth.<cluster_domain>`, `nomad.`, `consul.`, `traefik.` and
-the `*-cli.` names (`nomad-cli.`, `consul-cli.`, `auth-cli.`; they are the uplink of `task proxy:up`). A wildcard
+**DNS records** (at your DNS provider, pointing at the ingress node): `auth.<cluster_domain>`, `nomad.`, `consul.`, `traefik.`. A wildcard
 `*.<cluster_domain>` covers all of them and your own services. The nodes' own names need no records.
 
 ## 2. Create the secrets (once)

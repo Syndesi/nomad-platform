@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Cluster dns (%i)
+After=network.target
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/cluster/dns-%i.conf --pid-file=
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

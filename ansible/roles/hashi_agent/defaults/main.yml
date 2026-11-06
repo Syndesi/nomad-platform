@@ -15,6 +15,10 @@ hashi_agent_config_dir: "/etc/{{ hashi_agent_name }}.d"
 # Everything after the binary. Config dir flag differs: nomad `-config <dir>`, consul `-config-dir <dir>`.
 hashi_agent_args: "agent -config-dir {{ hashi_agent_config_dir }}"
 
+# The account the daemon runs as (nomad clients need root, consul does not). The config fragments are owned by root, group = hashi_agent_group.
+hashi_agent_user: root
+hashi_agent_group: root
+
 # Extra raw lines for the [Service] section of the systemd unit.
 hashi_agent_systemd_service_extra: []
 

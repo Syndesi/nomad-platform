@@ -50,6 +50,12 @@ table inet {{ cluster_firewall_table }} {
   chain forward {
     type filter hook forward priority filter; policy accept;
 
+    # containers of the network "{{ cluster_egress_cni_name }}" (mode = "cni/{{ cluster_egress_cni_name }}") may reach anything
+    iifname "{{ cluster_egress_bridge }}" accept
+    # every other container: only the cluster and the container networks, not the internet. New connections are rejected at once (an
+    # application sees "no route to host", not a timeout).
+    iifname { "docker0", "nomad", "br-*" } ip daddr != { {{ cluster_firewall_container_destinations | join(', ') }} } ct state new counter reject with icmp type admin-prohibited
+    iifname { "docker0", "nomad", "br-*" } meta nfproto ipv6 ct state new counter reject with icmpv6 type admin-prohibited
     iifname { "docker0", "nomad", "br-*" } accept
     ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } accept
     # new connections to a container that are not dnat'ed, i.e. routed straight to its ip (nomad's bridge has no protection of its own)
@@ -58,5 +64,14 @@ table inet {{ cluster_firewall_table }} {
     ct status dnat ct original proto-dst { {{ cluster_firewall_public_tcp_ports | join(', ') }} } accept
 {% endif %}
     ct status dnat counter drop
+  }
+
+  # dns of the containers: all of them are told to ask {{ cluster_dns_docker_bridge_ip }} (docker's `dns`), where the restricted resolver answers
+  # (*.consul and this node's names). The containers of the network "{{ cluster_egress_cni_name }}" are sent to the full resolver instead.
+  chain container_dns {
+    type nat hook prerouting priority dstnat; policy accept;
+
+    iifname "{{ cluster_egress_bridge }}" ip daddr {{ cluster_dns_docker_bridge_ip }} udp dport 53 dnat ip to {{ cluster_egress_bridge_ip }}
+    iifname "{{ cluster_egress_bridge }}" ip daddr {{ cluster_dns_docker_bridge_ip }} tcp dport 53 dnat ip to {{ cluster_egress_bridge_ip }}
   }
 }

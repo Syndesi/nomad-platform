@@ -8,11 +8,12 @@ authelia_users:
     groups: [admin]
 
 authelia_access_rules:
-  # Every rule is two_factor (site.yml refuses anything else). The *-cli names are the uplink of the local proxy (`task proxy:up`).
-  - domain: ["nomad.{{ cluster_domain }}", "nomad-cli.{{ cluster_domain }}"]
+  # Traefik sends every request through authelia; a domain without a rule is denied. Rules are two_factor, deny, or `bypass` for a
+  # public job (first match wins, so put bypass rules after these).
+  - domain: "nomad.{{ cluster_domain }}"
     policy: two_factor
     subject: ["group:admin"]
-  - domain: ["consul.{{ cluster_domain }}", "consul-cli.{{ cluster_domain }}"]
+  - domain: "consul.{{ cluster_domain }}"
     policy: two_factor
     subject: ["group:admin"]
   - domain: "traefik.{{ cluster_domain }}"

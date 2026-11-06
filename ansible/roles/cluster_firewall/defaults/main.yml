@@ -6,6 +6,8 @@
 #   - the nomad and consul ports (rpc, serf, http) only from cluster_firewall_cluster_sources
 #   - traefik's 80 and 443 on the ingress nodes, from anywhere
 #   - from the container bridges (docker0, nomad, br-*) only dns, the nomad and consul api and cluster_firewall_bridge_*_ports; traffic the bridges send to published (nat'ed) ports passes the forward chain
+# Containers reach the internet only from the network "egress" (`mode = "cni/egress"`, see group_vars defaults.yml): the forward chain rejects new
+# connections from every other bridge to anything outside cluster_firewall_container_destinations.
 # Published (nat'ed) job ports pass the forward chain, not input: from outside the cluster and the bridges only the public ports get through,
 # any other dnat'ed traffic is dropped (authelia's 9091, the metrics port, ports of your own jobs).
 cluster_firewall_file: /etc/cluster/firewall.nft
@@ -27,5 +29,7 @@ cluster_firewall_public_tcp_ports: "{{ [80, 443] if inventory_hostname in groups
 # address (jobs and traefik behind wireguard talk to them; both still need tokens and tls). Consul connect needs nothing here (nomad gives
 # the sidecar a unix socket to the agent, mesh traffic is nat'ed and passes the forward chain). Ports of your own host services that jobs
 # need: add them here.
+# Where containers WITHOUT internet access may connect to: the cluster and the container networks (the network "egress" is not restricted)
+cluster_firewall_container_destinations: "{{ cluster_firewall_cluster_sources + [cluster_docker_bridge_subnet, cluster_nomad_bridge_subnet, cluster_egress_bridge_subnet] }}"
 cluster_firewall_bridge_tcp_ports: "{{ [53, cluster_nomad_http_port, cluster_consul_https_port] }}"
 cluster_firewall_bridge_udp_ports: [53]

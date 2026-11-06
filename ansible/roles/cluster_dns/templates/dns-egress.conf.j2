@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# The full resolver for the containers of the network "{{ cluster_egress_cni_name }}": everything goes to the node's resolver (systemd-resolved: *.consul and the
+# upstream). The bridge address appears when nomad creates the network.
+no-resolv
+server=127.0.0.53
+listen-address={{ cluster_egress_bridge_ip }}
+bind-dynamic

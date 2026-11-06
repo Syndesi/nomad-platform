@@ -5,6 +5,9 @@ client {
   network_interface = "{{ nomad_interface }}"
   # consul connect: sidecars run in a bridge network built from these cni plugins
   cni_path = "{{ nomad_cni_path }}"
+  # nomad's built-in bridge (mode = "bridge"); the firewall and dns rules know this subnet. Network "{{ cluster_egress_cni_name }}" ({{ cluster_egress_bridge }},
+  # {{ cluster_egress_bridge_subnet }}, mode = "cni/{{ cluster_egress_cni_name }}", /opt/cni/config) is read at start: this comment makes a change restart the agent.
+  bridge_network_subnet = "{{ cluster_nomad_bridge_subnet }}"
   options {
     # the driver Nomad's own tests use (fake tasks); it is built into source builds and has no use on a cluster
     "driver.denylist" = "mock_driver"

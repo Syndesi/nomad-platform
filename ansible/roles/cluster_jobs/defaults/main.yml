@@ -19,11 +19,13 @@ cluster_jobs_list:
   - name: authelia
     vars:
       image: "{{ cluster_authelia_image }}"
+      tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
   - name: traefik
     templates: true
     vars:
       templates_dir: "{{ cluster_jobs_remote_dir }}/traefik"
       image: "{{ cluster_traefik_image }}"
+      tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'traefik') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
       consul_port: "{{ cluster_consul_https_port }}"
       nomad_port: "{{ cluster_nomad_http_port }}"
       wireguard: "{{ cluster_traefik_wireguard | bool | to_json }}"

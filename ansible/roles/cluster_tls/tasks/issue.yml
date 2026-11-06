@@ -29,6 +29,41 @@
       register: cluster_tls_csr
       changed_when: true
 
+    # The node is not trusted: the CSR comes from a machine that may be compromised, and the signing copies its extensions (names, key usage,
+    # basic constraints) into the certificate. So the controller signs only what it would have asked for itself: exactly the names and
+    # usages of this node's role (cluster_tls_sans / cluster_tls_eku), the subject, an EC key, no other extension (no CA:TRUE, no name constraints).
+    - name: "{{ cluster_tls_name }}: read the CSR (on the controller)"
+      community.crypto.openssl_csr_info:
+        content: "{{ cluster_tls_csr.stdout }}"
+      delegate_to: localhost
+      become: false
+      register: cluster_tls_csr_info
+
+    - name: "{{ cluster_tls_name }}: the CSR asks for nothing but what this node gets"
+      ansible.builtin.assert:
+        that:
+          - cluster_tls_csr_info.signature_valid
+          - cluster_tls_csr_info.public_key_type == 'ECC'
+          - (cluster_tls_csr_info.subject_alt_name | map('lower') | sort) == (cluster_tls_sans.split(',') | map('trim') | map('lower') | sort)
+          - (cluster_tls_csr_info.extended_key_usage | sort) == (cluster_tls_eku.split(',') | map('extract', cluster_tls_eku_names) | sort)
+          - (cluster_tls_csr_info.key_usage | default([], true) | sort) == ['Digital Signature', 'Key Encipherment']
+          - cluster_tls_csr_info.basic_constraints is none
+          - cluster_tls_csr_info.extensions_by_oid.keys() | difference(['2.5.29.17', '2.5.29.15', '2.5.29.37']) | length == 0
+          - "cluster_tls_csr_info.subject == {'organizationName': cluster_name ~ ' cluster', 'commonName': cluster_tls_cn}"
+        fail_msg: >-
+          {{ inventory_hostname }} sent a CSR for '{{ cluster_tls_name }}' that is not what this node gets, NOT signed (possible compromise):
+          names {{ cluster_tls_csr_info.subject_alt_name }}, eku {{ cluster_tls_csr_info.extended_key_usage }},
+          key usage {{ cluster_tls_csr_info.key_usage }}, basic constraints {{ cluster_tls_csr_info.basic_constraints }},
+          extensions {{ cluster_tls_csr_info.extensions_by_oid.keys() | list }}, subject {{ cluster_tls_csr_info.subject }};
+          expected names {{ cluster_tls_sans }}, eku {{ cluster_tls_eku }}, CN {{ cluster_tls_cn }}.
+        quiet: true
+      delegate_to: localhost
+      become: false
+      vars:
+        cluster_tls_eku_names:
+          serverAuth: TLS Web Server Authentication
+          clientAuth: TLS Web Client Authentication
+
     - name: "{{ cluster_tls_name }}: sign with the cluster CA (on the controller, in memory)"
       community.crypto.x509_certificate_pipe:
         csr_content: "{{ cluster_tls_csr.stdout }}"
@@ -54,6 +89,7 @@
     - name: "{{ cluster_tls_name }}: put key and cert in place"
       ansible.builtin.shell: |
         d={{ cluster_tls_dir }}; n={{ cluster_tls_name }}
+        chown {{ cluster_tls_key_owner | default('root') }}:{{ cluster_tls_key_owner | default('root') }} "$d/$n.key.new"
         mv "$d/$n.key.new" "$d/$n.key" && mv "$d/$n.pem.new" "$d/$n.pem"
         printf '%s' {{ cluster_tls_sans | quote }} > "$d/$n.sans"
         rm -f "$d/$n.csr"
@@ -61,4 +97,12 @@
 
     - name: "{{ cluster_tls_name }}: remember that it changed"
       ansible.builtin.set_fact:
-        cluster_tls_node_changed: "{{ cluster_tls_node_changed | default(false) or cluster_tls_name == 'node' }}"
+        cluster_tls_node_changed: "{{ cluster_tls_node_changed | default(false) or cluster_tls_name in ['node', 'consul'] }}"
+
+# also right for a key that exists from before (the owner is a setting)
+- name: "{{ cluster_tls_name }}: owner and mode of the key"
+  ansible.builtin.file:
+    path: "{{ cluster_tls_dir }}/{{ cluster_tls_name }}.key"
+    owner: "{{ cluster_tls_key_owner | default('root') }}"
+    group: "{{ cluster_tls_key_owner | default('root') }}"
+    mode: "0600"

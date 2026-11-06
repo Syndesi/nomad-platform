@@ -6,6 +6,10 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
+{% if hashi_agent_user != 'root' %}
+User={{ hashi_agent_user }}
+Group={{ hashi_agent_group }}
+{% endif %}
 ExecStart={{ hashi_agent_bin_dir }}/{{ hashi_agent_name }} {{ hashi_agent_args }}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always

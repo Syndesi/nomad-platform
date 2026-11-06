@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# The resolver of containers WITHOUT internet access (the firewall sends the containers of the network "{{ cluster_egress_cni_name }}" to the full one):
+# *.consul and the names in /etc/hosts (this node's names), nothing from the internet - every other name gets NXDOMAIN.
+no-resolv
+# every name that is not forwarded below is answered here (NXDOMAIN, or an empty answer for a type the name lacks) instead of refused: a resolver
+# that gets REFUSED for the AAAA of a known name may fail the whole lookup
+local=/#/
+server=/consul/127.0.0.1#{{ cluster_dns_consul_port }}
+listen-address={{ cluster_dns_docker_bridge_ip }}
+bind-dynamic

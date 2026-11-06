@@ -2,7 +2,8 @@
 # Certificates by CSR: every key is generated ON the node it belongs to (never leaves it, never
 # exists on the controller); the controller only signs the CSR with the cluster CA, whose private
 # key stays sops-encrypted and is read into memory for the signing (variable cluster_ca_key).
-#   node.pem/key     nomad (rpc + https) and consul servers; consul clients get theirs from auto_encrypt
+#   node.pem/key     nomad (rpc + https), root only
+#   consul.pem/key   consul (rpc, https, grpc); the agent does not run as root, so this key is owned by its user and has only consul's names
 #   ingress.pem/key  wildcard for traefik (internal CA mode), on the nodes in group cluster_ingress
 
 - name: The cluster CA is there
@@ -32,14 +33,79 @@
     cluster_tls_sans: "{{ cluster_tls_node_sans }}"
     cluster_tls_eku: serverAuth,clientAuth
 
-- name: Ingress certificate
+# The consul agent does not run as root, so it has its own key (owned by it) and a certificate with its own names only
+- name: Group of the consul agent
+  ansible.builtin.group:
+    name: "{{ cluster_consul_user }}"
+    system: true
+
+- name: User of the consul agent (no login, no home)
+  ansible.builtin.user:
+    name: "{{ cluster_consul_user }}"
+    group: "{{ cluster_consul_user }}"
+    system: true
+    shell: /sbin/nologin
+    home: "{{ consul_data_dir | default('/var/lib/consul') }}"
+    create_home: false
+
+- name: Consul certificate
   ansible.builtin.include_tasks: issue.yml
   vars:
-    cluster_tls_name: ingress
-    cluster_tls_cn: "*.{{ cluster_domain }}"
-    cluster_tls_sans: "{{ cluster_tls_ingress_sans }}"
-    cluster_tls_eku: serverAuth
+    cluster_tls_name: consul
+    cluster_tls_cn: "{{ cluster_node_fqdn }}"
+    cluster_tls_sans: "{{ cluster_tls_consul_sans }}"
+    cluster_tls_eku: serverAuth,clientAuth
+    cluster_tls_key_owner: "{{ cluster_consul_user }}"
+
+# Certificates that jobs mount (host volumes, read only): one directory each so a job sees only its own key. The keys belong to root, the
+# containers run as root. A renewed certificate is picked up by the job when it restarts: role cluster_jobs puts the fingerprints in the
+# job variables, so the next deploy restarts the job.
+- name: Authelia server certificate (forward-auth is https; node name, cluster address)
+  when: cluster_tls_authelia
+  block:
+    - name: Directory of the authelia certificate
+      ansible.builtin.file:
+        path: "{{ cluster_authelia_tls_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Authelia certificate
+      ansible.builtin.include_tasks: issue.yml
+      vars:
+        cluster_tls_dir: "{{ cluster_authelia_tls_dir }}"
+        cluster_tls_name: authelia
+        cluster_tls_cn: "{{ cluster_node_fqdn }}"
+        cluster_tls_sans: "{{ cluster_tls_authelia_sans }}"
+        cluster_tls_eku: serverAuth
+
+- name: Ingress certificate
   when: cluster_tls_ingress
+  block:
+    - name: Directory of the ingress certificate
+      ansible.builtin.file:
+        path: "{{ cluster_ingress_tls_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ingress certificate
+      ansible.builtin.include_tasks: issue.yml
+      vars:
+        cluster_tls_dir: "{{ cluster_ingress_tls_dir }}"
+        cluster_tls_name: ingress
+        cluster_tls_cn: "*.{{ cluster_domain }}"
+        cluster_tls_sans: "{{ cluster_tls_ingress_sans }}"
+        cluster_tls_eku: serverAuth
+
+# the ingress key used to live in the tls directory (and was copied into a nomad variable); it only exists in its own directory now
+- name: The old ingress key and certificate in the tls directory are gone
+  ansible.builtin.file:
+    path: "{{ cluster_tls_dir }}/{{ item }}"
+    state: absent
+  loop: [ingress.key, ingress.pem, ingress.sans]
 
 - name: Install the CA certificate
   ansible.builtin.copy:

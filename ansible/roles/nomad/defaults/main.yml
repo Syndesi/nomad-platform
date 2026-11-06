@@ -29,4 +29,6 @@ nomad_host_volumes_dir: "{{ nomad_data_dir }}/volumes"
 nomad_host_volumes: >-
   {{ ([{'name': 'traefik', 'path': nomad_host_volumes_dir ~ '/traefik', 'read_only': false}]
       if inventory_hostname in groups['cluster_ingress'] | default([]) else [])
+     + ([{'name': 'ingress-tls', 'path': cluster_ingress_tls_dir, 'read_only': true}]
+        if (cluster_acme_ca == 'internal' and inventory_hostname in groups['cluster_ingress'] | default([])) else [])
      + (cluster_host_volumes | default([])) }}

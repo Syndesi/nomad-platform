@@ -1,0 +1,22 @@
+{
+  "cniVersion": "0.4.0",
+  "name": "{{ cluster_egress_cni_name }}",
+  "plugins": [
+    { "type": "loopback" },
+    {
+      "type": "bridge",
+      "bridge": "{{ cluster_egress_bridge }}",
+      "ipMasq": true,
+      "isGateway": true,
+      "forceAddress": true,
+      "hairpinMode": false,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [[{ "subnet": "{{ cluster_egress_bridge_subnet }}" }]],
+        "routes": [{ "dst": "0.0.0.0/0" }]
+      }
+    },
+    { "type": "firewall", "iptablesAdminChainName": "NOMAD-ADMIN" },
+    { "type": "portmap", "capabilities": { "portMappings": true }, "snat": true }
+  ]
+}
