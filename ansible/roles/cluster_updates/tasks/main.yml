@@ -1,0 +1,106 @@
+---
+# Security updates without reboots. Ubuntu: unattended-upgrades, run by the apt timers every cluster_updates_interval_hours.
+# Alpine: a cron job (busybox crond) with `apk upgrade`. See defaults.
+- name: Automatic updates on Ubuntu
+  when: cluster_updates_enabled | bool and ansible_facts['os_family'] == 'Debian'
+  block:
+    - name: unattended-upgrades is installed
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: present
+        cache_valid_time: 3600
+
+    - name: Periodic settings
+      ansible.builtin.template:
+        src: 20-cluster-auto-upgrades.j2
+        dest: /etc/apt/apt.conf.d/20cluster-auto-upgrades
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Security origins only, no reboot
+      ansible.builtin.template:
+        src: 52-cluster-unattended-upgrades.j2
+        dest: /etc/apt/apt.conf.d/52cluster-unattended-upgrades
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Timer drop-in directories
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}.timer.d"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: [apt-daily, apt-daily-upgrade]
+
+    - name: Timers run every cluster_updates_interval_hours
+      ansible.builtin.template:
+        src: timer-override.conf.j2
+        dest: "/etc/systemd/system/{{ item }}.timer.d/10-cluster.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [apt-daily, apt-daily-upgrade]
+      register: cluster_updates_timers
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: cluster_updates_timers is changed
+
+    - name: Timers are enabled and running
+      ansible.builtin.systemd:
+        name: "{{ item }}.timer"
+        enabled: true
+        state: "{{ 'restarted' if cluster_updates_timers is changed else 'started' }}"
+      loop: [apt-daily, apt-daily-upgrade]
+
+    - name: The configuration is accepted by unattended-upgrades
+      ansible.builtin.command: unattended-upgrade --dry-run
+      changed_when: false
+
+- name: Automatic updates on Alpine
+  when: cluster_updates_enabled | bool and ansible_facts['os_family'] == 'Alpine'
+  block:
+    - name: crond is enabled and running
+      ansible.builtin.service:
+        name: crond
+        enabled: true
+        state: started
+
+    # busybox crond reads /etc/crontabs/<user> only (no /etc/cron.d); the minute differs per node so they do not all hit the mirror at once
+    - name: apk upgrade every cluster_updates_interval_hours
+      ansible.builtin.lineinfile:
+        path: /etc/crontabs/root
+        create: true
+        owner: root
+        group: root
+        mode: "0600"
+        regexp: 'apk upgrade'
+        line: >-
+          {{ (inventory_hostname | hash('md5'))[:4] | int(base=16) % 60 }} */{{ cluster_updates_interval_hours }} * * *
+          apk upgrade --update-cache --no-progress 2>&1 | logger -t cluster-apk-upgrade
+
+- name: Automatic updates are off
+  when: not cluster_updates_enabled | bool
+  block:
+    - name: Alpine - no cron job
+      ansible.builtin.lineinfile:
+        path: /etc/crontabs/root
+        regexp: 'apk upgrade'
+        state: absent
+      when: ansible_facts['os_family'] == 'Alpine'
+
+    - name: Ubuntu - periodic upgrades off (the package's own 20auto-upgrades would turn them on)
+      ansible.builtin.copy:
+        content: |
+          // {{ ansible_managed }}
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+        dest: /etc/apt/apt.conf.d/20cluster-auto-upgrades
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts['os_family'] == 'Debian'

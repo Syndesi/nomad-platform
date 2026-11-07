@@ -21,7 +21,7 @@ umask 077
 mkdir -p "$out"
 work=$(mktemp -d /dev/shm/backup.XXXXXX)
 trap 'rm -rf "$work"; [ -e "$out/.complete" ] || { echo "backup failed, removing $out" >&2; rm -rf "$out"; }' EXIT
-nm=$("$BASE/scripts/secrets.sh" get cluster_nomad_management_token)
+nm=$(nomad_ops_token)
 cm=$(consul_ops_token)
 
 # snapshot <file> <env assignment> <snapshot save command>: the server writes it into a private temp dir and streams it back

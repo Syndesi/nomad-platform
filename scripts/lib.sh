@@ -64,3 +64,10 @@ consul_ops_token() {
   t=$("$BASE/scripts/tofu-enc.sh" tofu-consul output -json service_tokens 2>/dev/null | jq -r '.ops // empty' 2>/dev/null) || t=""
   if [ -n "$t" ]; then printf '%s\n' "$t"; else "$BASE/scripts/secrets.sh" get cluster_consul_management_token; fi
 }
+
+# The same for nomad: the ops token (management) from the state of tofu-nomad once the deploy handed over to it, else the bootstrap token
+nomad_ops_token() {
+  local t
+  t=$("$BASE/scripts/tofu-enc.sh" tofu-nomad output -json nomad_tokens 2>/dev/null | jq -r '.ops // empty' 2>/dev/null) || t=""
+  if [ -n "$t" ]; then printf '%s\n' "$t"; else "$BASE/scripts/secrets.sh" get cluster_nomad_management_token; fi
+}

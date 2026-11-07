@@ -1,0 +1,4 @@
+// {{ ansible_managed }}
+// An interval slightly below the timer's period, so a timer that fires a few minutes early is not skipped until the next run.
+APT::Periodic::Update-Package-Lists "{{ [cluster_updates_interval_hours | int - 1, 1] | max }}h";
+APT::Periodic::Unattended-Upgrade "{{ [cluster_updates_interval_hours | int - 1, 1] | max }}h";

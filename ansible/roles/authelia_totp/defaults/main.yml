@@ -8,6 +8,6 @@ authelia_totp_out_dir: "{{ cluster_dir }}/secrets/authelia"
 authelia_totp_env:
   NOMAD_ADDR: "https://127.0.0.1:{{ cluster_nomad_http_port }}"
   NOMAD_CACERT: "{{ cluster_tls_dir }}/ca.pem"
-  NOMAD_TOKEN: "{{ cluster_nomad_management_token }}"
+  NOMAD_TOKEN: "{{ cluster_nomad_ops_token }}"
 # the command prefix in the allocation (nomad alloc exec, then the authelia cli)
 authelia_totp_exec: [nomad, alloc, exec, -job, -task, authelia, authelia, authelia, storage, user, totp]

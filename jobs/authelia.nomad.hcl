@@ -3,9 +3,10 @@
 # the cluster's authelia.yml + secrets), so no secret is part of this spec.
 # The sqlite database (totp secrets, devices, bans) is on the host volume "authelia" (/srv/authelia on the node, made by the nomad role),
 # so the job is bound to the nodes that have it (client meta authelia = true: the servers by default) and survives redeployments.
-# The rendered config (session secret, storage key, password hashes) goes to secrets/ (not readable through `nomad alloc fs`), mode 0600.
+# The rendered config (session secret, storage key, password hashes) goes to secrets/ (mounted as /secrets, not readable through `nomad alloc fs`), mode 0600.
 # Port 9091 (https) is published on the node's cluster address; the firewall's forward chain drops it for everything outside the cluster.
-# Backed up by `task backup`. Never run it with auto_revert: a failed upgrade may already have migrated the database, and an older image
+# Hardened like traefik: not root (variable user: the id owns the database folder and the key), all capabilities dropped, a read-only root
+# filesystem. Backed up by `task backup`. Never run it with auto_revert: a failed upgrade may already have migrated the database, and an older image
 # cannot read a newer schema.
 
 variable "datacenter" {
@@ -16,6 +17,11 @@ variable "image" {
 }
 variable "domain" {
   type = string
+}
+# The user id authelia runs as (it owns the database folder and reads its key); "" = the image's own user (root)
+variable "user" {
+  type    = string
+  default = ""
 }
 # Fingerprint of the server certificates of the authelia nodes (made by role cluster_tls, mounted from the node): authelia reads its
 # certificate when it starts, so a renewed one has to change the job (this variable) to restart it.
@@ -73,8 +79,9 @@ job "authelia" {
       check {
         type     = "http"
         protocol = "https"
-        # the check comes from the node itself to its own address; the certificate is checked where it matters (traefik)
-        tls_skip_verify = true
+        # the check is made by the consul agent of the node, which verifies the certificate with the system roots (role cluster_tls puts the cluster CA there); the
+        # address is the node's, the name is one of the names in the certificate
+        tls_server_name = "authelia.service.consul"
         path            = "/api/health"
         interval        = "10s"
         timeout         = "3s"
@@ -83,6 +90,8 @@ job "authelia" {
 
     task "authelia" {
       driver = "docker"
+
+      user = var.user # "" = the image's own user
 
       volume_mount {
         volume      = "authelia"
@@ -104,22 +113,40 @@ job "authelia" {
         data        = <<EOT
 {{ with nomadVar "nomad/jobs/authelia" }}{{ .configuration }}{{ end }}
 EOT
-        destination = "secrets/config/configuration.yml"
+        destination = "secrets/configuration.yml"
         perms       = "0600"
+        # nomad writes templates as root: hand them to the task user
+        uid = var.user == "" ? 0 : parseint(var.user, 10)
+        gid = var.user == "" ? 0 : parseint(var.user, 10)
       }
 
       template {
         data        = <<EOT
 {{ with nomadVar "nomad/jobs/authelia" }}{{ .users }}{{ end }}
 EOT
-        destination = "secrets/config/users.yml"
+        destination = "secrets/users.yml"
         perms       = "0600"
+        # nomad writes templates as root: hand them to the task user
+        uid = var.user == "" ? 0 : parseint(var.user, 10)
+        gid = var.user == "" ? 0 : parseint(var.user, 10)
       }
 
       config {
         image   = var.image
         ports   = ["http"]
-        volumes = ["secrets/config:/config"]
+        # the rendered files are in the task's secrets directory (/secrets), which nomad hands to the task user; a subdirectory would be root's
+        args = ["--config", "/secrets/configuration.yml"]
+        # nothing but its own files: no capability (port 9091 needs none), a read-only root filesystem (config, database and certificate
+        # are mounts, /tmp a small tmpfs)
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+        mount {
+          type   = "tmpfs"
+          target = "/tmp"
+          tmpfs_options {
+            size = 16777216
+          }
+        }
       }
 
       resources {

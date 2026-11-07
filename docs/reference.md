@@ -47,6 +47,19 @@ the ops token from then on (`consul_ops_token` in `scripts/lib.sh`). It is the s
 tofu-consul does not belong to the cluster any more (rebuilt cluster, old state), the deploy stops with a message; the bootstrap secret in the sops
 file is valid only for a cluster that was built with it and not handed over yet.
 
+Nomad's bootstrap token (`cluster_nomad_management_token`, the secret given to `nomad acl bootstrap`) is handed over the same way: tofu-nomad mints
+an **ops token** (type `management`, `nomad_tokens.ops` in the encrypted state), `task backup`, `task smoke`, tofu-nomad and the second-factor
+registration use it (`nomad_ops_token` in `scripts/lib.sh`, `cluster_nomad_ops_token`), and the deploy deletes the bootstrap token from the cluster (role
+`nomad_acl`, tasks `token` / `handover`). The one exception is `task restore`: it needs the bootstrap token to restore the snapshot into the fresh cluster
+(the snapshot brings the old ops token back).
+
+## Automatic updates
+
+Every node installs updates by itself every `cluster_updates_interval_hours` (12, role `cluster_updates`; `cluster_updates_enabled: false` switches it off).
+Ubuntu: `unattended-upgrades`, security pockets only (Ubuntu security, ESM). Alpine: a cron job with `apk upgrade` (Alpine has no security-only channel).
+Nothing reboots: a kernel or libc update waits for you, and `task maintenance` lists the nodes that want a reboot. Docker images and the nomad / consul
+binaries are not packages and are untouched.
+
 ## Authelia: second factor
 
 Traefik asks Authelia about **every** request on `websecure` (a default middleware of the entry point): a job that forgets the middleware

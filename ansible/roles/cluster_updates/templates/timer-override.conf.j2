@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 00/{{ cluster_updates_interval_hours }}:00
+RandomizedDelaySec=1h

@@ -22,6 +22,7 @@ cluster_jobs_list:
   - name: authelia
     vars:
       image: "{{ cluster_authelia_image }}"
+      user: "{{ cluster_authelia_uid | string if cluster_authelia_uid | int != 0 else '' }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
   - name: traefik
     templates: true

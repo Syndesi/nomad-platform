@@ -33,7 +33,8 @@ cluster_nomad_gossip_key: "$(key)"
 # Consul: acl.tokens.initial_management - the BOOTSTRAP token, only in the config while the cluster is built; tofu-consul then mints the ops token
 # and the deploy deletes this one from the cluster
 cluster_consul_management_token: "$(uuid)"
-# Nomad: SecretID handed to 'nomad acl bootstrap <file>' (works once per cluster)
+# Nomad: SecretID handed to 'nomad acl bootstrap <file>' (works once per cluster) - the BOOTSTRAP token; tofu-nomad then mints the ops token
+# and the deploy deletes this one from the cluster
 cluster_nomad_management_token: "$(uuid)"
 # Passphrase of the client-side state encryption of the tofu roots that hold tokens (tofu-consul, tofu-nomad)
 cluster_tofu_state_passphrase: "$(string)"

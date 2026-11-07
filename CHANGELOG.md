@@ -4,6 +4,12 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- Automatic updates (role `cluster_updates`): every 12 hours (`cluster_updates_interval_hours`), never a reboot. Ubuntu: `unattended-upgrades` with the security pockets only; Alpine: a cron job with `apk upgrade`. `cluster_updates_enabled: false` turns it off.
+- Nomad: the bootstrap token is handed over like consul's. tofu-nomad mints an ops token (`management`), the deploy deletes the bootstrap token from the cluster; tofu, `task backup`, `task smoke` and the TOTP registration use the ops token (`cluster_nomad_ops_token`, `nomad_ops_token` in `scripts/lib.sh`). Existing clusters are migrated by the next `task deploy:ansible`. New: role `nomad_acl` tasks `token` / `handover`.
+- Authelia is hardened like traefik: it runs as `cluster_authelia_uid` (8000, was root), all capabilities dropped, read-only root filesystem (small tmpfs on /tmp). Its folder and key belong to that user (changed in place on the next deploy). The health check verifies the certificate (no `tls_skip_verify`).
+- `site.yml` stops early when `cluster_servers` does not have exactly one node (the platform is built for a single server).
+- Alpine: consul is hardened under OpenRC as far as `supervise-daemon` allows: no new privileges, empty capability bounding set, umask 077, no core dumps (new `hashi_agent_openrc_*` settings). Mount namespaces and a read-only filesystem do not exist there.
+
 - Traefik: the router, the forward-auth middleware and the service of Authelia are in the file provider (`authelia@file`); Authelia's service has no
   traefik tags any more. A job's tags can no longer redefine the middleware (which took the whole ingress down). The admin routers send HSTS and the
   usual browser headers. New job variable `authelia_addr` (set by the deploy).
@@ -13,7 +19,7 @@ Notable changes per version. Older history is in git.
 - Authelia sessions: 18h inactivity, 24h lifetime, "remember me" off (`authelia_session_remember_me: -1`; were 7 days).
 - The cluster CA is name-constrained (critical `nameConstraints`: `cluster_domain`, `cluster_node_domain`, `.consul`, `.nomad`, `host.internal`, `localhost`, loopback + private IPv4 ranges; `cluster_ca_permitted_*`). Existing CAs are not changed: to get the constraint make a new CA (`pki/ca.pem` and `ca.sops.yml` deleted, `task pki:ca`) and redeploy; the nodes' short hostnames are no longer certificate names (the FQDN is).
 - Traefik no longer runs as root with the default capabilities: user `cluster_traefik_uid` (65532; root with wireguard), all capabilities dropped (`NET_BIND_SERVICE` only), read-only root filesystem. The ingress node sets `net.ipv4.ip_unprivileged_port_start=80`; its data volume and the ingress key belong to that user.
-- systemd units: consul gets a sandbox (no privileges or capabilities, read-only filesystem except its data directory, private /tmp and /dev, kernel protections), nomad a subset (`NoNewPrivileges`, kernel modules / logs / clock, realtime, personality). OpenRC nodes are unchanged.
+- systemd units: consul gets a sandbox (no privileges or capabilities, read-only filesystem except its data directory, private /tmp and /dev, kernel protections), nomad a subset (`NoNewPrivileges`, kernel modules / logs / clock, realtime, personality).
 - Nomad clients deny the task drivers exec, java and qemu as well as mock_driver (`nomad_driver_denylist`): they run on the host network, outside the container firewall.
 - Traefik: rate limit on the Authelia portal (`auth.`) per source address, stricter on the login endpoints (10 per minute, burst 5), because Authelia only counts failures per username.
 - `cluster_ingress` must have exactly one node (checked by site.yml): traefik is a single instance and DNS points at one node. `cluster_authelia_hosts` defaults to that node.

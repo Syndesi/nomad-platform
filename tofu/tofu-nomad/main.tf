@@ -133,6 +133,13 @@ resource "nomad_acl_token" "client" {
   policies = [each.value]
 }
 
+# What the controller works with (tofu, backup, restore, the second factors) once the bootstrap token (`nomad acl bootstrap` with the pre-generated
+# secret) is handed over and deleted (role nomad_acl, tasks handover). Same power; the difference is that its secret is only in the encrypted state.
+resource "nomad_acl_token" "ops" {
+  name = "${var.datacenter}-ops"
+  type = "management"
+}
+
 # ---- nomad variables: job config and secrets (the jobs themselves are run with `nomad job run`) ----
 
 resource "nomad_variable" "authelia" {

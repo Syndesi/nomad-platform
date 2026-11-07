@@ -108,7 +108,7 @@ done
 # containers: no internet and no public dns by default (*.consul and the node's names work); the network egress (cni/egress) has both.
 # One container of each kind on every client node.
 mt=$(consul_ops_token)
-nm=$("$BASE/scripts/secrets.sh" get cluster_nomad_management_token)
+nm=$(nomad_ops_token)
 mgmt() { cluster_exec "$server" env "NOMAD_TOKEN=$nm" "CONSUL_HTTP_TOKEN=$mt" sh -lc "$1"; }
 echo "-- container networks (bridge: closed, cni/egress: open) and their dns"
 mgmt "cat > /tmp/network.nomad.hcl" < "$BASE/tests/network.nomad.hcl"
@@ -148,7 +148,7 @@ mgmt "nomad job stop -purge network-test >/dev/null; rm -f /tmp/network.nomad.hc
 if [ "${1:-}" = connect ]; then
   echo "-- consul connect (envoy sidecars through the cni bridge)"
   mt=$(consul_ops_token)
-  nm=$("$BASE/scripts/secrets.sh" get cluster_nomad_management_token)
+  nm=$(nomad_ops_token)
   mgmt() { cluster_exec "$server" env "NOMAD_TOKEN=$nm" "CONSUL_HTTP_TOKEN=$mt" sh -lc "$1"; }
   mgmt "cat > /tmp/connect.nomad.hcl" < "$BASE/tests/connect.nomad.hcl"
   mgmt "consul intention create -replace -allow count-client count-api >/dev/null 2>&1 || true"

@@ -66,14 +66,22 @@
     - inventory_hostname in groups['cluster_ingress'] | default([])
     - cluster_traefik_uid | int != 0
 
-# Authelia's state: a folder of its own (root only; the container runs as root), before the agent that offers it as a volume
+# Authelia's state: a folder of its own (only the user authelia runs as, cluster_authelia_uid), before the agent that offers it as a volume
 - name: Authelia state directory
   ansible.builtin.file:
     path: "{{ cluster_authelia_dir }}"
     state: directory
     mode: "0700"
-    owner: root
-    group: root
+    owner: "{{ cluster_authelia_uid | int }}"
+    group: "{{ cluster_authelia_uid | int }}"
+  when: nomad_authelia_enabled | bool
+
+# a database made by an earlier root-run authelia (or a restore) is handed over too
+- name: Authelia state files belong to that user too
+  ansible.builtin.shell: |
+    find {{ cluster_authelia_dir | quote }} -not -user {{ cluster_authelia_uid | int }} -exec chown {{ cluster_authelia_uid | int }}:{{ cluster_authelia_uid | int }} {} + -print
+  register: nomad_authelia_chown
+  changed_when: nomad_authelia_chown.stdout | length > 0
   when: nomad_authelia_enabled | bool
 
 # One file per concern. 30-server / 40-client only exist on nodes with that role. Other roles /

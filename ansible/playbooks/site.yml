@@ -4,9 +4,10 @@
 #   2. consul servers (initial_management token from the sops secrets, no acl bootstrap race)
 #   3. tofu-consul: acl policies, one agent token per node, service tokens
 #   4. consul servers pick up their agent token (restart only if the config changed), consul clients join
-#   5. nomad servers (+ client on the same node, with its consul token), `nomad acl bootstrap` (once)
+#   5. nomad servers (+ client on the same node, with its consul token), `nomad acl bootstrap` (once, with the pre-generated token)
 #   6. nomad clients
-#   7. tofu-nomad: workload identity (consul auth method, needs a running nomad), nomad acl policies + tokens, job variables
+#   7. tofu-nomad: workload identity (consul auth method, needs a running nomad), nomad acl policies + tokens (+ the ops token, which replaces
+#      the bootstrap token: that one is deleted from the cluster), job variables
 #   8. the default jobs (authelia, traefik), run with `nomad job run -var-file`
 # With -e cluster_restore_dir=<backup> (task restore) the cluster is not started empty: the consul snapshot is restored right after the consul
 # servers are up and the nomad snapshot right after the nomad acl bootstrap, both BEFORE the tofu stages, so the tokens in the states
@@ -57,6 +58,16 @@
         quiet: true
       vars:
         cluster_ssh_key_type: "{{ (lookup('ansible.builtin.file', cluster_ssh_key_file ~ '.pub') | trim).split(' ')[0] }}"
+
+    # bootstrap_expect is the number of servers, and everything here (one traefik, one authelia, a single consul and nomad server, the
+    # backup and restore) assumes one. Two servers would have a quorum of two and no fault tolerance at all; three are not built for yet.
+    - name: Exactly one server
+      ansible.builtin.assert:
+        that: (groups['cluster_servers'] | default([])) | length == 1
+        fail_msg: >-
+          The group cluster_servers has {{ (groups['cluster_servers'] | default([])) | length }} nodes: this platform is built for a single-server
+          cluster (one consul and one nomad server). Put exactly one node into cluster_servers.
+        quiet: true
 
     - name: Exactly one ingress node
       ansible.builtin.assert:
@@ -258,6 +269,10 @@
         enabled: true
         state: started
       when: ansible_facts["os_family"] == "Alpine"
+
+    - name: Automatic security updates (no reboots)
+      ansible.builtin.include_role:
+        name: cluster_updates
 
     - name: Log retention (one file per day, cluster_log_retention_days)
       ansible.builtin.include_role:
@@ -467,6 +482,16 @@
   roles:
     - nomad
 
+- name: Which nomad token the cluster accepts
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Probe (bootstrap token or ops token)
+      ansible.builtin.include_role:
+        name: nomad_acl
+        tasks_from: token
+
 - name: Nomad acl objects and job variables (tofu-nomad)
   hosts: localhost
   connection: local
@@ -476,6 +501,22 @@
       ansible.builtin.include_role:
         name: cluster_jobs
         tasks_from: objects
+
+# tofu-nomad minted the ops token: the bootstrap token can go.
+- name: Hand over from the bootstrap token to the ops token (nomad)
+  hosts: cluster_servers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Which token works now
+      ansible.builtin.include_role:
+        name: nomad_acl
+        tasks_from: token
+
+    - name: Delete the bootstrap token
+      ansible.builtin.include_role:
+        name: nomad_acl
+        tasks_from: handover
 
 - name: Default jobs (authelia, traefik)
   hosts: cluster_servers[0]

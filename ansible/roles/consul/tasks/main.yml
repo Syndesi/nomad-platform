@@ -13,7 +13,13 @@
     # not root: the agent needs no privileged port and no capability (user and group are made by role cluster_tls, which issues its key)
     hashi_agent_user: "{{ cluster_consul_user }}"
     hashi_agent_group: "{{ cluster_consul_user }}"
-    # systemd only (OpenRC has no equivalent). The agent writes its data directory and nothing else, listens on ports above 1024.
+    # The agent writes its data directory and nothing else, listens on ports above 1024. systemd: the sandbox below. OpenRC has no mount
+    # namespaces or read-only filesystem, so there: no new privileges, empty capability bounding set, umask 077, no core dumps (a core of the agent would
+    # hold the gossip key and tokens). The data directory is private to the account anyway.
+    hashi_agent_openrc_no_new_privs: true
+    hashi_agent_openrc_drop_caps: true
+    hashi_agent_openrc_umask: "077"
+    hashi_agent_openrc_ulimit: "-c 0"
     hashi_agent_systemd_service_extra:
       - NoNewPrivileges=true
       - CapabilityBoundingSet=

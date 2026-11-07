@@ -26,7 +26,7 @@ variable "ca_file" {
 }
 
 variable "nomad_token" {
-  description = "Nomad management token (given to `nomad acl bootstrap` by ansible)"
+  description = "A Nomad management token: the ops token, or the bootstrap token (given to `nomad acl bootstrap` by ansible) until it is handed over"
   type        = string
   sensitive   = true
 }

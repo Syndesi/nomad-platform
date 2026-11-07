@@ -57,8 +57,8 @@
     cluster_tls_eku: serverAuth,clientAuth
     cluster_tls_key_owner: "{{ cluster_consul_user }}"
 
-# Certificates that jobs mount (host volumes, read only): one directory each so a job sees only its own key. The keys belong to root, the
-# containers run as root. A renewed certificate is picked up by the job when it restarts: role cluster_jobs puts the fingerprints in the
+# Certificates that jobs mount (host volumes, read only): one directory each so a job sees only its own key. The keys belong to the user the container runs as
+# (cluster_authelia_uid, cluster_traefik_uid). A renewed certificate is picked up by the job when it restarts: role cluster_jobs puts the fingerprints in the
 # job variables, so the next deploy restarts the job.
 - name: Authelia server certificate (forward-auth is https; node name, cluster address)
   when: cluster_tls_authelia
@@ -109,6 +109,15 @@
     mode: "0600"
   when: cluster_tls_ingress
 
+# the authelia key is read by authelia's container user (cluster_authelia_uid)
+- name: Authelia key belongs to the user authelia runs as
+  ansible.builtin.file:
+    path: "{{ cluster_authelia_tls_dir }}/authelia.key"
+    owner: "{{ cluster_authelia_uid }}"
+    group: "{{ cluster_authelia_uid }}"
+    mode: "0600"
+  when: cluster_tls_authelia
+
 # the ingress key used to live in the tls directory (and was copied into a nomad variable); it only exists in its own directory now
 - name: The old ingress key and certificate in the tls directory are gone
   ansible.builtin.file:
@@ -124,6 +133,28 @@
     group: root
     mode: "0644"
   register: cluster_tls_ca_install
+
+# The system trust store gets the cluster CA too: consul's own http checks (authelia's /api/health over https) verify with the system roots only and have
+# no setting for a CA. The CA is name-constrained (cluster names, .consul, .nomad, private addresses), so it vouches for nothing else.
+# Go reads the system roots once, so a consul that runs already is restarted (hashi_agent_restart_pending, picked up by role consul).
+- name: The cluster CA in the system trust store
+  ansible.builtin.copy:
+    src: "{{ cluster_ca_cert }}"
+    dest: /usr/local/share/ca-certificates/cluster-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  register: cluster_tls_ca_system
+
+- name: Rebuild the system trust store
+  ansible.builtin.command: update-ca-certificates
+  changed_when: true
+  when: cluster_tls_ca_system is changed
+
+- name: Consul reads the system roots again
+  ansible.builtin.set_fact:
+    hashi_agent_restart_pending: "{{ (hashi_agent_restart_pending | default([]) + ['consul']) | unique }}"
+  when: cluster_tls_ca_system is changed
 
 # The cli reads only environment variables. A profile.d file is only seen by login shells (not by
 # `incus exec`, the web terminal, su, cron), so instead the cli is wrapped: /usr/local/sbin comes

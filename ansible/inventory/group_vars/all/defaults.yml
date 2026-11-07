@@ -82,6 +82,12 @@ cluster_nomad_out: "{{ hostvars['localhost']['tofu_out_nomad'] | default({}) }}"
 # The consul token of the controller. cluster_consul_management_token (sops) is only the BOOTSTRAP token (initial_management, first start). Once tofu-consul
 # has minted the ops token, the bootstrap token is deleted. Which of the two the cluster accepts is probed (role consul, tasks token).
 cluster_consul_ops_token: "{{ hostvars['localhost']['cluster_consul_token_effective'] | default(cluster_consul_management_token) }}"
+# The same for nomad: cluster_nomad_management_token (sops) is only the BOOTSTRAP token (`nomad acl bootstrap`, first start). tofu-nomad mints the ops token
+# (type management) and the bootstrap token is deleted (role nomad_acl, tasks token / handover). Before the probe ran (a run limited to some nodes) the ops
+# token of the state is taken if there is one.
+cluster_nomad_ops_token: >-
+  {{ hostvars['localhost']['cluster_nomad_token_effective']
+     | default((cluster_nomad_out.nomad_tokens | default({})).ops | default(cluster_nomad_management_token)) }}
 
 # --- access to the nodes (ssh) --------------------------------------------------------------
 # One unprivileged account does everything; root cannot log in over ssh. It is created on a node once by
@@ -171,6 +177,9 @@ cluster_egress_bridge_ip: 172.26.80.1
 # same host) and keeps one database. It must be a client. The folder is part of `task backup`.
 cluster_authelia_hosts: "{{ groups['cluster_ingress'] | default([]) }}"
 cluster_authelia_dir: /srv/authelia
+# The user id authelia runs as in its container (0 = root). Not root by default: all capabilities are dropped, the root filesystem is read-only,
+# and the folder above and the key of its certificate belong to this id.
+cluster_authelia_uid: 8000
 # Certificates that a JOB mounts from the node as a read-only host volume (the key never leaves the node): authelia's own server
 # certificate (forward-auth is https) on the nodes in cluster_authelia_hosts, the ingress wildcard on the ingress node (internal CA mode).
 # One directory each, so a job sees only its own key.

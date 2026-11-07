@@ -13,7 +13,7 @@
 # visible in the process list of the node. algorithm / digits / period are the values of authelia's totp section (authelia-configuration.yml.j2).
 - name: Register the TOTP secrets of the users in authelia (on stdin)
   ansible.builtin.command:
-    argv: "{{ authelia_totp_exec + ['import', '/dev/stdin', '--config', '/config/configuration.yml'] }}"
+    argv: "{{ authelia_totp_exec + ['import', '/dev/stdin', '--config', '/secrets/configuration.yml'] }}"
     stdin: |
       totp_configurations:
       {% for u in authelia_totp_users %}
@@ -35,7 +35,7 @@
 # the otpauth URIs (the registration for the authenticator app) are read back from the database; nothing secret on the command line here either
 - name: Read the registrations (otpauth URIs)
   ansible.builtin.command:
-    argv: "{{ authelia_totp_exec + ['export', 'uri', '--config', '/config/configuration.yml'] }}"
+    argv: "{{ authelia_totp_exec + ['export', 'uri', '--config', '/secrets/configuration.yml'] }}"
   environment: "{{ authelia_totp_env }}"
   register: authelia_totp_uris
   no_log: true

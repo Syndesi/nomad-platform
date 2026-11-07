@@ -5,6 +5,9 @@ log:
   format: json
 server:
   address: 'tcp://:9091'
+  # the image's own docker HEALTHCHECK needs a file in /app that authelia writes at startup; the root filesystem is read-only and nomad / consul
+  # check /api/health themselves
+  disable_healthcheck: true
   # https: traefik's forward-auth calls (session cookies) cross the cluster network. The certificate is the node's own, made by role
   # cluster_tls, mounted from the node (host volume authelia-tls, jobs/authelia.nomad.hcl); traefik verifies it with the cluster CA.
   tls:
@@ -72,7 +75,7 @@ authentication_backend:
   password_change:
     disable: true
   file:
-    path: /config/users.yml
+    path: /secrets/users.yml
 identity_validation:
   reset_password:
     jwt_secret: {{ cluster_authelia_reset_password_jwt_secret | to_json }}

@@ -1,0 +1,42 @@
+---
+# Which nomad token does the cluster accept from the controller: the ops token (type management, minted by tofu-nomad, in the encrypted state) or the
+# bootstrap token (`nomad acl bootstrap`, the sops secret)? Asks the local nomad of the first server, so run it there.
+# Sets on localhost: cluster_nomad_token_effective (the ops token if it works, else the bootstrap token) and cluster_nomad_bootstrap_alive.
+# Fails if neither works: the state of tofu-nomad does not belong to this cluster (a rebuilt cluster with the old state: remove state/tofu-consul
+# and state/tofu-nomad, or restore the backup that belongs to them).
+- name: Candidates, the ops token first
+  ansible.builtin.set_fact:
+    nomad_token_candidates: >-
+      {{ ([{'name': 'ops', 'token': cluster_nomad_out.nomad_tokens.ops}] if (cluster_nomad_out.nomad_tokens | default({})).ops is defined else [])
+         + [{'name': 'bootstrap', 'token': cluster_nomad_management_token}] }}
+  no_log: true
+
+- name: Ask the local nomad about each token
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ cluster_nomad_http_port }}/v1/acl/token/self"
+    ca_path: "{{ cluster_tls_dir }}/ca.pem"
+    headers:
+      X-Nomad-Token: "{{ item.token }}"
+    status_code: [200, 403]
+  loop: "{{ nomad_token_candidates }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: nomad_token_probe
+  no_log: true
+  changed_when: false
+
+- name: One of them works
+  ansible.builtin.assert:
+    that: nomad_token_probe.results | selectattr('status', 'eq', 200) | list | length > 0
+    fail_msg: >-
+      Neither the ops token (state/tofu-nomad) nor the bootstrap token (cluster_nomad_management_token) is accepted by nomad. The state does not
+      belong to this cluster: after a rebuild remove state/tofu-consul and state/tofu-nomad (task restore puts the matching ones in place).
+    quiet: true
+
+- name: The token the controller works with
+  ansible.builtin.set_fact:
+    cluster_nomad_token_effective: "{{ nomad_token_probe.results | selectattr('status', 'eq', 200) | map(attribute='item.token') | list | first }}"
+    cluster_nomad_bootstrap_alive: "{{ 'bootstrap' in (nomad_token_probe.results | selectattr('status', 'eq', 200) | map(attribute='item.name') | list) }}"
+  delegate_to: localhost
+  delegate_facts: true
+  no_log: true
