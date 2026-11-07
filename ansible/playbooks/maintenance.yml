@@ -20,8 +20,23 @@
       ansible.builtin.assert:
         that:
           - cluster_ca_cert is file
-          - cluster_ca_key is defined
+          - cluster_intermediate_cert is file
+          - cluster_intermediate_key is defined
         quiet: true
+
+    # the tokens of the cluster (deployer token of the jobs, ops tokens): read from the encrypted states, as site.yml does
+    - name: Outputs of the tofu stages
+      ansible.builtin.include_role:
+        name: tofu_stage
+        tasks_from: outputs
+      vars:
+        tofu_stage_name: "{{ item.name }}"
+        tofu_stage_fact: "{{ item.fact }}"
+      loop:
+        - { name: tofu-consul, fact: tofu_out_consul }
+        - { name: tofu-nomad, fact: tofu_out_nomad }
+      loop_control:
+        label: "{{ item.name }}"
 
     - name: ssh client config
       ansible.builtin.template:
@@ -110,10 +125,17 @@
     - name: Which daemons run here?
       ansible.builtin.service_facts:
 
-    - name: Serial of the new leaf cert
-      ansible.builtin.command: openssl x509 -noout -serial -in {{ cluster_tls_dir }}/node.pem
+    - name: Serial of the new cert of each daemon (nomad serves node.pem, consul its own consul.pem)
+      ansible.builtin.command: openssl x509 -noout -serial -in {{ cluster_tls_dir }}/{{ item.cert }}
+      loop: "{{ maintenance_daemons }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: maintenance_file_serial
       changed_when: false
+      vars: &maint_daemons
+        maintenance_daemons: >-
+          {{ [{'name': 'nomad', 'port': cluster_nomad_http_port, 'cert': 'node.pem'}]
+             + ([{'name': 'consul', 'port': cluster_consul_https_port, 'cert': 'consul.pem'}] if inventory_hostname in groups['cluster_servers'] else []) }}
 
     - name: Serial each daemon actually serves
       ansible.builtin.shell: >-
@@ -125,10 +147,7 @@
       register: maintenance_served
       changed_when: false
       failed_when: false
-      vars:
-        maintenance_daemons: >-
-          {{ [{'name': 'nomad', 'port': cluster_nomad_http_port}]
-             + ([{'name': 'consul', 'port': cluster_consul_https_port}] if inventory_hostname in groups['cluster_servers'] else []) }}
+      vars: *maint_daemons
 
     - name: Restart a daemon that did not pick the new cert up on reload
       ansible.builtin.service:
@@ -137,7 +156,7 @@
       loop: "{{ maintenance_served.results }}"
       loop_control:
         label: "{{ item.item.name }}"
-      when: item.stdout != maintenance_file_serial.stdout
+      when: item.stdout != (maintenance_file_serial.results | selectattr('item.name', 'eq', item.item.name) | map(attribute='stdout') | first)
 
     - name: Daemons serve the new cert
       ansible.builtin.shell: >-
@@ -147,14 +166,14 @@
       loop_control:
         label: "{{ item.item.name }}"
       register: maintenance_recheck
-      until: maintenance_recheck.stdout == maintenance_file_serial.stdout
+      until: maintenance_recheck.stdout == (maintenance_file_serial.results | selectattr('item.name', 'eq', item.item.name) | map(attribute='stdout') | first)
       retries: 10
       delay: 3
       changed_when: false
 
     - name: Reload or restart outcome
       ansible.builtin.debug:
-        msg: "{{ item.item.item.name }}: {{ 'reload was enough' if item.item.stdout == maintenance_file_serial.stdout else 'needed a restart' }}"
+        msg: "{{ item.item.item.name }}: {{ 'reload was enough' if item.item.stdout == (maintenance_file_serial.results | selectattr('item.name', 'eq', item.item.item.name) | map(attribute='stdout') | first) else 'needed a restart' }}"
       loop: "{{ maintenance_recheck.results }}"
       loop_control:
         label: "{{ inventory_hostname }}"

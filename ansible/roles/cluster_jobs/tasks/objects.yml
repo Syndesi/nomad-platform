@@ -18,5 +18,15 @@
       datacenter: "{{ cluster_datacenter }}"
       task_kv_prefixes: "{{ cluster_consul_task_kv_prefixes }}"
       traefik_consul_token: "{{ cluster_consul_out.service_tokens.traefik }}"
-      authelia_configuration: "{{ lookup('ansible.builtin.template', 'authelia-configuration.yml.j2') }}"
+      authelia_configuration: "{{ lookup('ansible.builtin.template', 'authelia-configuration.yml.j2', template_vars={'authelia_inst': cluster_jobs_authelia_instances[0]}) }}"
       authelia_users: "{{ lookup('ansible.builtin.template', 'authelia-users.yml.j2') }}"
+      authelia_internal_configuration: "{{ lookup('ansible.builtin.template', 'authelia-configuration.yml.j2', template_vars={'authelia_inst': cluster_jobs_authelia_instances[1]}) }}"
+      authelia_internal_users: "{{ lookup('ansible.builtin.template', 'authelia-users.yml.j2') }}"
+      vpn_wg_conf: "{{ lookup('ansible.builtin.template', 'vpn-wg.conf.j2') }}"
+      stepca_items: >-
+        {{ {'ca_json': lookup('ansible.builtin.template', 'step-ca.json.j2'),
+            'root': lookup('ansible.builtin.file', cluster_ca_cert),
+            'intermediate': lookup('ansible.builtin.file', cluster_stepca_intermediate_cert),
+            'intermediate_key': cluster_stepca_intermediate_key_enc,
+            'password': cluster_stepca_password,
+            'client_template': lookup('ansible.builtin.template', 'step-ca-client.tpl.j2')} if cluster_stepca_enabled | bool else {} }}

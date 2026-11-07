@@ -51,8 +51,31 @@ variable "authelia_users" {
   sensitive = true
 }
 
+variable "authelia_internal_configuration" {
+  type      = string
+  sensitive = true
+}
+
+variable "authelia_internal_users" {
+  type      = string
+  sensitive = true
+}
+
+variable "vpn_wg_conf" {
+  description = "wg-quick config of the VPN server in traefik's allocation (private key and the peers with their preshared keys)"
+  type        = string
+  sensitive   = true
+}
+
 variable "task_kv_prefixes" {
   description = "Consul KV prefixes that nomad tasks (workload identity) may read; empty = no KV access"
   type        = list(string)
   default     = []
+}
+
+variable "stepca_items" {
+  description = "items of the nomad variable nomad/jobs/step-ca (ca.json, root, intermediate and its encrypted key, password, template); empty = no step-ca"
+  type        = map(string)
+  sensitive   = true
+  default     = {}
 }

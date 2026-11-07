@@ -148,13 +148,55 @@ tasks:
       - "{{.EXEC}} /work/base/scripts/ssh-forget.sh {{.CLI_ARGS}}"
 
   pki:ca:
-    desc: Create the cluster CA ONCE - certificate in pki/, private key sops-encrypted (refuses to overwrite)
+    desc: Create the cluster PKI ONCE - offline root and two intermediates (ansible, step-ca), certificates in pki/, private keys sops-encrypted (refuses to overwrite)
     deps: [up]
     cmds:
       - "{{.EXEC}} /work/base/scripts/pki.sh ca"
 
+  stepca:init:
+    desc: The key material of the step-ca job (password, provisioner keys, the intermediate key encrypted); safe to repeat
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/stepca.sh init"
+
+  vpn:init:
+    desc: ONCE - the wireguard key pair of the VPN server (inventory/group_vars/all/vpn.sops.yml)
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/vpn.sh init"
+
+  vpn:client:
+    desc: "A VPN device (or a new certificate for it): task vpn:client -- <device>. Files in secrets/vpn/<device>/, then task deploy:ansible"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/vpn.sh client {{.CLI_ARGS}}"
+
+  vpn:revoke:
+    desc: "Remove a VPN device (its wireguard peer): task vpn:revoke -- <device>, then task deploy:ansible"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/vpn.sh revoke {{.CLI_ARGS}}"
+
+  vpn:list:
+    desc: VPN devices, their addresses and when their client certificates expire
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/vpn.sh list"
+
+  secrets:ensure:
+    desc: Add secrets that a newer version of the platform needs to an existing secrets file (never changes existing ones)
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/secrets.sh ensure"
+
+  pki:intermediate:
+    desc: "Replace an intermediate: task pki:intermediate -- stepca (yearly) | ansible. Needs pki/root.sops.yml; then redeploy"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/pki.sh intermediate {{.CLI_ARGS}}"
+
   pki:info:
-    desc: "Show the CA validity (the leaf certs live on the nodes only, see pki:nodes)"
+    desc: "Show the validity of the root and the intermediates (the leaf certs live on the nodes only, see pki:nodes)"
     deps: [up]
     cmds:
       - "{{.EXEC}} /work/base/scripts/pki.sh info"
@@ -181,7 +223,7 @@ tasks:
     internal: true
     cmds:
       - |
-        rm -rf .sops.yaml pki/ca.pem inventory/group_vars/all/*.sops.yml state/tofu-consul state/tofu-nomad
+        rm -rf .sops.yaml pki/*.pem pki/*.sops.yml inventory/group_vars/all/*.sops.yml state/tofu-consul state/tofu-nomad
         docker compose exec -T tools rm -rf /dev/shm/cluster 2>/dev/null || true
         rm -f "${AGE_KEY_DIR:-./secrets/age}/keys.txt"
         echo "secrets removed; start again with: task age:init pki:ca secrets:init"

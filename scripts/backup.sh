@@ -48,18 +48,36 @@ done
 
 # authelia's database (sqlite: second factors, devices, bans) from every node that has one, as an SQL dump made by sqlite3 itself (in a throwaway container, nothing is installed on the node) (`.dump` reads in
 # one transaction: consistent even if authelia writes meanwhile; a copy of the file could catch a half-written page). Restore replays it into a new file.
-adir=$(cvar cluster_authelia_dir)
 sqlite_image=$(cvar cluster_sqlite_image)
-for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; } | sort -u); do
-  if cluster_root "$n" "test -s $adir/db.sqlite3" >/dev/null 2>&1; then
-    [ -n "$sqlite_image" ] || { echo "cluster_sqlite_image is not set (an image with sqlite3, see the defaults): needed to dump the database of authelia" >&2; exit 1; }
-    # a throwaway container: no network, only the authelia folder (rw: sqlite needs the -shm file of a WAL database even to read)
-    cluster_root "$n" "docker run --rm --network none --read-only --user 0 -v $adir:/data --entrypoint sqlite3 $sqlite_image -cmd '.timeout 10000' /data/db.sqlite3 .dump" | age "${rflags[@]}" > "$out/authelia-$n.sql.age"
-    age -d -i "${SOPS_AGE_KEY_FILE:-/age/keys.txt}" "$out/authelia-$n.sql.age" > "$work/authelia.sql"
-    grep -q 'CREATE TABLE' "$work/authelia.sql" || { echo "authelia dump of $n is empty" >&2; exit 1; }
-    rm -f "$work/authelia.sql"
-  fi
+# both instances: authelia (the public names) and authelia-internal (the zone behind the VPN); files authelia-<node>.sql.age / authelia-internal-<node>.sql.age
+for inst in authelia:cluster_authelia_dir authelia-internal:cluster_authelia_internal_dir; do
+  iname=${inst%%:*}; adir=$(cvar "${inst#*:}")
+  for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; } | sort -u); do
+    if cluster_root "$n" "test -s $adir/db.sqlite3" >/dev/null 2>&1; then
+      [ -n "$sqlite_image" ] || { echo "cluster_sqlite_image is not set (an image with sqlite3, see the defaults): needed to dump the database of authelia" >&2; exit 1; }
+      # a throwaway container: no network, only the authelia folder (rw: sqlite needs the -shm file of a WAL database even to read)
+      cluster_root "$n" "docker run --rm --network none --read-only --user 0 -v $adir:/data --entrypoint sqlite3 $sqlite_image -cmd '.timeout 10000' /data/db.sqlite3 .dump" | age "${rflags[@]}" > "$out/$iname-$n.sql.age"
+      age -d -i "${SOPS_AGE_KEY_FILE:-/age/keys.txt}" "$out/$iname-$n.sql.age" > "$work/authelia.sql"
+      grep -q 'CREATE TABLE' "$work/authelia.sql" || { echo "$iname dump of $n is empty" >&2; exit 1; }
+      rm -f "$work/authelia.sql"
+    fi
+  done
 done
+
+# step-ca's database (issued certificates, ACME accounts and orders; no key): streamed out of its allocation as a tar (badger, an LSM store: the tables are
+# written once and a copy of a running store is almost always whole; if it ever fails to open after a restore, remove the folder: the CA starts
+# empty and traefik asks for its certificates again, nothing else is lost)
+if [ "$(cvar cluster_stepca_enabled)" = True ] || [ "$(cvar cluster_stepca_enabled)" = true ]; then
+  nport=$(cvar cluster_nomad_http_port); tdir=$(cvar cluster_tls_dir)
+  if printf '%s\n' "$nm" | cluster_exec "$server" sh -c "read -r t; export NOMAD_TOKEN=\$t NOMAD_ADDR=https://127.0.0.1:$nport NOMAD_CACERT=$tdir/ca.pem
+      a=\$(nomad job allocs -json step-ca | jq -r '[.[] | select(.ClientStatus == \"running\")] | sort_by(.CreateTime) | last | .ID // empty')
+      [ -n \"\$a\" ] || exit 3
+      nomad alloc exec -i=false -t=false -task step-ca \$a tar -C /db -cf - ." 2>/dev/null | age "${rflags[@]}" > "$out/step-ca-db.tar.age" && [ -s "$out/step-ca-db.tar.age" ]; then
+    age -d -i "${SOPS_AGE_KEY_FILE:-/age/keys.txt}" "$out/step-ca-db.tar.age" | tar -tf - >/dev/null || { echo "step-ca database tar is not readable" >&2; exit 1; }
+  else
+    rm -f "$out/step-ca-db.tar.age"; echo "(step-ca is not running: its database is not in this backup)" >&2
+  fi
+fi
 
 # prove they are readable: decrypt on tmpfs and let the product inspect its snapshot (binaries from `task build`)
 for p in nomad consul; do

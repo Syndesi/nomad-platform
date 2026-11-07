@@ -111,6 +111,59 @@ two ciphers and `ssh-ed25519` keys (`cluster_ssh_*`). The automation key is gene
 By default `sudo` (Ubuntu) / `doas` (Alpine) are passwordless for the `ansible` user. `task become:password` stores a password
 (sops) that the next deploy sets and requires; going back needs the bootstrap script or console access.
 
+## Internal services behind a VPN (zone `<cluster_name>.internal`)
+
+The ops UIs (`auth.`, `nomad.`, `consul.`, `traefik.<cluster_name>.internal`) and any internal app are **not** on the public entry point. Their
+routers live in Traefik's file provider on the entry point `vpn`, which only exists on the WireGuard address inside Traefik's allocation
+(`cluster_vpn_subnet`, default `10.99.0.0/24`, the server is `.1`). In front of them is a **second Authelia** (`authelia-internal`): own cookie
+domain, secrets, sqlite database, TOTP seeds (`authelia_internal_totp_seeds`, always separate from the public ones, `task authelia:seed` makes both), bans.
+
+```
+device --tcp/443 (SNI vpn.<cluster_domain>, mTLS)--> traefik TCP router (TLS passthrough) --> wstunnel --udp 127.0.0.1:51820--> wireguard (wg1)
+device --wg--> 10.99.n.1: tcp/443 (redirected to the vpn entry point) and udp+tcp/53 (dnsmasq: *.<zone> -> 10.99.n.1), nothing else
+```
+
+* **WireGuard is the gate** (key + preshared key per device); wstunnel is only the disguise over tcp/443 (`--restrict-to 127.0.0.1:51820`, client
+  certificate required, CN = device name). The UDP port is not published. `ip_forward=0` in the namespace and an nft table drop everything but 443
+  and 53 on `wg1`: no route into the cluster network, consul, nomad, step-ca, sshd or the metrics port. Traefik always runs in its own namespace
+  (`cni/egress`; `cluster_traefik_uid` is root there).
+* The inner TLS is `pq-only` (TLS 1.3, X25519MLKEM768): a client without it (OpenSSL < 3.5, old browsers) cannot open the internal names. The outer layers
+  are not post-quantum (WireGuard has a preshared key as a hedge).
+* **Devices:** `task vpn:init` (once: server key), `task vpn:client -- <device>` (key pair, preshared key, address, client certificate; files in
+  `secrets/vpn/<device>/`: `wg-<cluster>.conf`, `wstunnel@.service`, the env file, `install.sh`, `nm-install.sh` for NetworkManager), `task deploy:ansible`
+  (the server learns the peer), `task vpn:revoke -- <device>` (removes the peer: **revocation is removing the WireGuard peer**), `task vpn:list`.
+  The client certificate lives `cluster_vpn_client_valid_days` (365); run `task vpn:client -- <device>` again before it expires (the wireguard
+  keys stay); `task smoke` and `task proxy:status` warn `cluster_vpn_client_warn_days` before. No `DNS=` in the client config: only the zone goes
+  through the VPN (systemd-resolved), several clusters can be connected at once (distinct subnets, interfaces, zones, local ports).
+* **Command line tools:** `task proxy:up|login` now goes through the VPN (`PROXY_UPSTREAM` defaults to `10.99.n.1:443`); the VPN must be up.
+* Break glass is SSH (public, key only), e.g. `scripts/tunnel.sh` to the node's 127.0.0.1 ports with a token.
+* Accepted: `vpn.<cluster_domain>` is visible as SNI on 443 and the gate is reachable from the internet (mTLS); the client's public IP is lost behind
+  the TLS passthrough (device identity survives: CN, peer IP); TCP over TCP (fine for admin UIs, not for bulk); the VPN lives in a Nomad job, if
+  Nomad / Docker / Traefik is down it is gone, SSH remains. **Do not put the VPN name behind a proxying CDN** (wstunnel issue #481: Cloudflare in front
+  corrupts the stream; needs `--tls-sni-override` and still resets connections). The tunnel MTU is 1280 (`cluster_vpn_mtu`).
+
+## step-ca: the always-online intermediate (job `step-ca`)
+
+`task pki:ca` makes the offline root and two intermediates, both name-constrained: **ansible** (the controller: agent, node and ingress certificates)
+and **step-ca** (about a year, `task pki:intermediate -- stepca` replaces it, then `task stepca:init` and a deploy). The step-ca job holds the
+step-ca intermediate (key encrypted; password and the two JWK provisioner keys in `stepca-material.sops.yml`, from `task stepca:init`).
+Nomad and Consul agent certificates **never** come from step-ca (an expired one would break the thing that renews it); Consul Connect keeps its own CA.
+
+* **Reachable through the Consul mesh only:** it binds 127.0.0.1:9000 in its own namespace, no host port. Intentions are default deny
+  (tofu-consul): only the service `traefik-acme` (Traefik's group, upstream `step-ca` -> 127.0.0.1:9000) may connect. Operators use
+  `nomad alloc exec`. It must not be published, reached from the VPN, or from a workload without an intention (`task smoke` and the tests check).
+* **Traefik** has two resolvers: the public one (`cluster_acme_ca`) and `stepca` for the internal routers: tls-alpn-01, per-name certificates,
+  7 days (`cluster_stepca_cert_hours`, `certificatesDuration`), the ACME provisioner may only issue `*.<zone>`. step-ca validates against the ingress
+  node's cluster address (its own dnsmasq maps the zone there; the challenge only returns a token, the routers stay on `vpn`).
+* **wstunnel's certificate** is issued by the deploy (provisioner `services`, only the VPN name) and renewed in place by the sidecar `vpn-renew`
+  (`step ca renew --daemon`); `task maintenance` issues a new one if it expired anyway. Authelia-internal's certificate stays on the Ansible path
+  (it runs outside a container network).
+* **Device certificates** (1 year, CN only, client auth only) are issued by `task vpn:client` through `nomad alloc exec` (provisioner `clients`, a template).
+* Backup: `task backup` streams step-ca's database (badger) out of the allocation; restore puts it back before the job starts. Without it step-ca
+  starts empty and Traefik asks for the certificates again. An outage of step-ca is survivable for up to 7 days.
+* Envoy (BoringSSL) cannot verify a chain with IP name constraints and an IP in the leaf, so Consul's gRPC listener has its own certificate
+  without IP addresses (`consul-grpc`). `cluster_stepca_enabled: false` keeps the interim wildcard from the ansible intermediate.
+
 ## Docker, volumes, logs
 
 * Jobs cannot bind-mount arbitrary host paths (`cluster_docker_volumes_enabled: false`). Declare per node
@@ -159,5 +212,5 @@ Do not edit anything below `base/`: change the platform in its own repo and move
 
 ## Open ideas (not implemented)
 
-* An always-online intermediate CA (root offline, intermediate on a server, e.g. step-ca; nodes renew with their still-valid certificate). Leaf
+* Nodes renewing their own agent certificates from step-ca (deliberately not done, see above). Leaf
   certificates are valid for a year (`cluster_leaf_valid_days`) and renewed by `site.yml` / `task maintenance`; nothing alerts before they expire.

@@ -13,13 +13,20 @@ cluster_region: global # nomad region (appears in cert names: server.<region>.no
 #   https://...         any other ACME directory URL
 cluster_acme_ca: internal
 
-# PKI (the CA itself is created once by `task pki:ca`)
+# PKI (created once by `task pki:ca`): an offline root (pki/ca.pem; its key is not in the inventory) and two intermediates below it.
+# The ansible intermediate signs everything the controller issues (agent certs, node certs, ingress certificate), the step-ca intermediate
+# belongs to the step-ca job (short-lived certs of the internal services). Replace the step-ca one yearly: `pki.sh intermediate stepca`.
 cluster_ca_valid_days: 3650
+cluster_intermediate_valid_days: 1825
+cluster_stepca_intermediate_valid_days: 365
+# The zone of the internal services (behind the VPN): <app>.<cluster_name>.internal. The cluster name, not the datacenter: every cluster
+# is dc1 by default, and two VPNs up at once must not claim the same zone.
+cluster_internal_zone: "{{ cluster_name }}.internal"
 # The CA is name-constrained (x509 nameConstraints, critical): it can only sign for these names and addresses, so an operator who imports it into
 # a browser does not trust it for the rest of the internet. Every leaf name must lie within them (cluster_pki_extra_sans too). Changing them
 # means a new CA (task pki:ca on a fresh start, then redeploy everything). IPv4 only, as CIDR; the default is loopback + RFC 1918 + CGNAT
 # (what cluster_private_address_regex accepts), because the subnet itself is only known per node.
-cluster_ca_permitted_dns: "{{ ([cluster_domain, cluster_node_domain, 'consul', 'nomad', 'host.internal', 'localhost'] + cluster_ca_extra_dns) | unique }}"
+cluster_ca_permitted_dns: "{{ ([cluster_domain, cluster_node_domain, cluster_internal_zone, 'consul', 'nomad', 'host.internal', 'localhost'] + cluster_ca_extra_dns) | unique }}"
 cluster_ca_extra_dns: []
 cluster_ca_permitted_ips: ['127.0.0.1/32', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10']
 cluster_leaf_valid_days: 365 # a leaf is re-issued by site.yml once half of this is over (maintenance always re-issues)
@@ -57,7 +64,9 @@ cluster_acme_server: "{{ '' if cluster_acme_ca == 'internal' else cluster_acme_d
 # mount point /work, passed in as $CLUSTER_DIR); everything else follows a fixed layout (docs/architecture.md).
 cluster_dir: "{{ lookup('ansible.builtin.env', 'CLUSTER_DIR') }}"
 cluster_base_dir: "{{ cluster_dir }}/base"
-cluster_ca_cert: "{{ cluster_dir }}/pki/ca.pem" # public; the key is cluster_ca_key from ca.sops.yml
+cluster_ca_cert: "{{ cluster_dir }}/pki/ca.pem" # the root, public: what nodes and clients trust (its key is in no inventory file)
+cluster_intermediate_cert: "{{ cluster_dir }}/pki/intermediate-ansible.pem" # public; the key is cluster_intermediate_key from ca.sops.yml
+cluster_stepca_intermediate_cert: "{{ cluster_dir }}/pki/intermediate-stepca.pem" # public; the key is cluster_stepca_intermediate_key from stepca.sops.yml
 # the (encrypted) states and plugin dirs of the two tofu roots that run against the cluster
 cluster_state_dir: "{{ cluster_dir }}/state"
 # *.hcl.j2 files in these directories are templated into the daemons' config directories next to the base
@@ -189,8 +198,9 @@ cluster_ingress_tls_dir: /etc/cluster/tls-ingress
 authelia_session_inactivity: 18h # without a request for this long the session ends
 authelia_session_expiration: 24h # this long after the login the session ends whatever happened in between (one login per day)
 authelia_session_remember_me: -1 # -1 disables "remember me" (it would outlive the 24h cap); a duration such as 168h enables it
-# the name an authenticator app shows for the account
+# the name an authenticator app shows for the account (the public instance; the internal one has its own entry, so both can sit in one app)
 authelia_totp_issuer: "{{ cluster_domain }}"
+authelia_totp_issuer_internal: "{{ cluster_internal_zone }}"
 # WebAuthn (security keys): false by default, see README
 authelia_webauthn: false
 
@@ -211,18 +221,17 @@ cluster_log_retention_days: 7
 # KV prefixes that nomad tasks (workload identity) may read in consul (templates `key`/`ls`). None by default.
 cluster_consul_task_kv_prefixes: []
 
-# --- traefik behind wireguard (optional) ------------------------------------------------------------
-# true: traefik runs in a bridge network together with a wireguard client in the same allocation (prestart sidecar), so the
-# tunnel lives in the allocation's own network namespace and no host service can drop it. Needs:
-#   cluster_wireguard_image  a wireguard client image whose entrypoint brings up /config/wg_confs/*.conf (e.g. the linuxserver one)
+# --- traefik: own network namespace, the VPN, the optional uplink tunnel ---------------------------------
+# Traefik always runs in its own network namespace (network "cni/egress"), because the VPN of the internal services terminates in it (see the
+# vpn section below). It is root there with only net_bind_service: the sysctl ip_unprivileged_port_start is not ours to set in that namespace.
+# cluster_traefik_wireguard (optional, independent of the VPN): traefik is also a wireguard CLIENT of an uplink (a router in a homelab:
+# 80 / 443 arrive through it), a second prestart sidecar in the same allocation. Needs:
+#   cluster_wireguard_image  a wireguard image whose entrypoint brings up /config/wg_confs/*.conf (the linuxserver one; also used for the VPN server)
 #   `task wireguard:conf -- <wg0.conf>`  stores the wg-quick config sops-encrypted (inventory/group_vars/all/wireguard.sops.yml)
 cluster_traefik_wireguard: false
-# The user id traefik runs as in its container (0 = root). Not root by default: all capabilities are dropped, the ingress node lowers
-# net.ipv4.ip_unprivileged_port_start to 80 so ports 80 / 443 need none, and the files traefik writes / reads (its data volume, the ingress key)
-# belong to this id. With wireguard traefik shares the allocation's own network namespace, where that sysctl is not ours to set: root, with only
-# net_bind_service.
-cluster_traefik_uid: "{{ 0 if cluster_traefik_wireguard | bool else 65532 }}"
-cluster_wireguard_image: ""
+# The user id traefik runs as in its container. Root: see above.
+cluster_traefik_uid: 0
+cluster_wireguard_image: linuxserver/wireguard:1.0.20260223
 # traefik's prometheus metrics: own entry point and port, consul service "traefik-metrics", for the cluster only (the firewall limits it
 # to cluster_subnets), not routed by traefik. A scraper job finds them through consul.
 cluster_traefik_metrics: true
@@ -233,3 +242,54 @@ cluster_wireguard_bypass: "{{ cluster_subnets }}"
 # derived
 cluster_ssh_key_file: /ssh/ansible_ed25519 # inside the tools container, see tools/compose.yml (task ssh:init -- <key> uses your own)
 cluster_ssh_config_file: "{{ cluster_run_dir }}/ssh_config"
+
+# --- internal services behind a VPN ---------------------------------------------------------------------
+# The ops UIs (auth., nomad., consul., traefik.<zone>) and any internal app live in the zone cluster_internal_zone (<cluster_name>.internal), reachable
+# only through a VPN that ends in traefik's allocation and reaches traefik only: wireguard (the gate) carried over tcp/443 by wstunnel (disguise,
+# not a boundary; it forwards to 127.0.0.1:51820 and nothing else). Traefik terminates TLS 1.3 / X25519MLKEM768 on the entry point "vpn" and asks
+# a second Authelia (own cookie, own users' second factors, own bans). `task vpn:client -- <device>` makes a client.
+#   wstunnel     traefik routes tcp/443 with SNI cluster_vpn_host to it, TLS passthrough; it requires a client certificate (mTLS)
+#   wireguard    interface wg1 in the allocation, listens on udp 51820 on loopback only (nothing published), peers /32 with a preshared key each
+#   dnsmasq      answers on the wg1 address only: *.<zone> -> that address, everything else NXDOMAIN
+cluster_vpn_host: "vpn.{{ cluster_domain }}"
+# one subnet per cluster (all distinct, so several VPNs can be up at once); the server is the first address
+cluster_vpn_subnet: 10.99.0.0/24 # a /24 (the server is .1, the clients get .2 and up)
+cluster_vpn_server_ip: "{{ (cluster_vpn_subnet.split('/')[0].split('.')[:3] + ['1']) | join('.') }}"
+cluster_vpn_wg_port: 51820
+cluster_vpn_mtu: 1280 # wireguard runs inside a tcp connection (and, in a homelab, inside the uplink tunnel as well)
+cluster_vpn_wstunnel_port: 8444 # in the allocation's namespace, loopback
+cluster_vpn_entrypoint_port: 8443 # traefik's entry point "vpn"; the namespace redirects tcp/443 of wg1 to it
+cluster_vpn_uid: 1000 # wstunnel's user (the image's "app": its binary sits in a 0700 home): owns the key of its certificate
+cluster_wstunnel_image: ghcr.io/erebe/wstunnel:v10.5.0
+cluster_dnsmasq_image: dockurr/dnsmasq:2.93
+# lifetime of the client certificates for the wstunnel mTLS gate (revocation = remove the wireguard peer, `task vpn:revoke`)
+cluster_vpn_client_valid_days: 365
+cluster_vpn_client_warn_days: 30
+
+# the second Authelia (authelia-internal): cookie domain cluster_internal_zone, its own secrets, database and TOTP seeds. Same users and password hashes.
+cluster_authelia_internal_port: 9092
+cluster_authelia_internal_dir: /srv/authelia-internal
+cluster_authelia_internal_tls_dir: /etc/cluster/tls-authelia-internal
+cluster_vpn_tls_dir: /etc/cluster/tls-vpn # wstunnel's certificate
+cluster_internal_tls_dir: /etc/cluster/tls-internal # traefik's certificate for the zone
+# Access rules of authelia-internal (the zone behind the VPN): the ops UIs for the admin group, plus whatever the cluster adds for its own internal apps
+# (authelia_internal_extra_rules in the cluster repo: [{domain, policy, subject}], same format as authelia_access_rules; first match wins).
+authelia_internal_extra_rules: []
+authelia_internal_access_rules: >-
+  {{ [{'domain': 'nomad.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
+      {'domain': 'consul.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
+      {'domain': 'traefik.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']}]
+     + authelia_internal_extra_rules }}
+
+# ---- step-ca: the always-online intermediate CA (job step-ca), reached only through the Consul service mesh ----
+cluster_stepca_enabled: true
+cluster_stepca_image: smallstep/step-ca:0.30.2
+cluster_stepca_uid: 1000 # the user of the image (owns the database folder)
+cluster_stepca_dir: /srv/step-ca # database of the job (issued certificates, ACME accounts), on its node
+# the node of the job: a server that is not the ingress node when the cluster has more than one, else the ingress node
+cluster_stepca_hosts: >-
+  {{ (((groups['cluster_servers'] | intersect(groups['cluster_clients'] | default([]))) | difference(groups['cluster_ingress'] | default([])))
+      or (groups['cluster_ingress'] | default([])))[:1] }}
+cluster_stepca_cert_hours: 168 # lifetime of the certificates of the internal services (7 days); traefik renews them in time (certificatesDuration)
+cluster_stepca_ca_url: https://127.0.0.1:9000 # inside the mesh: every client sees step-ca here (connect upstream)
+cluster_stepca_acme_url: "{{ cluster_stepca_ca_url }}/acme/acme/directory"

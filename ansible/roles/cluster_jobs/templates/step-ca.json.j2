@@ -1,0 +1,30 @@
+{#- ca.json of the step-ca job (rendered into the nomad variable nomad/jobs/step-ca). The files it names are the other items of that variable. -#}
+{%- set renew_h = cluster_stepca_cert_hours | string ~ 'h' -%}
+{%- set provisioners = [
+  {
+    'type': 'ACME', 'name': 'acme', 'challenges': ['tls-alpn-01'], 'forceCN': false,
+    'claims': {'minTLSCertDuration': '24h', 'maxTLSCertDuration': renew_h, 'defaultTLSCertDuration': renew_h},
+    'policy': {'x509': {'allow': {'dns': ['*.' ~ cluster_internal_zone]}}}
+  },
+  {
+    'type': 'JWK', 'name': 'services', 'key': cluster_stepca_provisioners.services.public | from_json, 'encryptedKey': cluster_stepca_provisioners.services.encrypted,
+    'claims': {'minTLSCertDuration': '24h', 'maxTLSCertDuration': renew_h, 'defaultTLSCertDuration': renew_h},
+    'policy': {'x509': {'allow': {'dns': [cluster_vpn_host]}}}
+  },
+  {
+    'type': 'JWK', 'name': 'clients', 'key': cluster_stepca_provisioners.clients.public | from_json, 'encryptedKey': cluster_stepca_provisioners.clients.encrypted,
+    'claims': {'minTLSCertDuration': '24h', 'maxTLSCertDuration': ((cluster_vpn_client_valid_days | int + 30) * 24) | string ~ 'h', 'defaultTLSCertDuration': (cluster_vpn_client_valid_days | int * 24) | string ~ 'h', 'disableRenewal': true},
+    'options': {'x509': {'templateFile': '/secrets/client.tpl'}}
+  }
+] -%}
+{{ {
+  'root': '/secrets/root.pem',
+  'crt': '/secrets/intermediate.pem',
+  'key': '/secrets/intermediate.key',
+  'address': '127.0.0.1:9000',
+  'dnsNames': ['localhost', '127.0.0.1'],
+  'logger': {'format': 'text'},
+  'db': {'type': 'badgerv2', 'dataSource': '/db'},
+  'authority': {'provisioners': provisioners},
+  'tls': {'minVersion': 1.3, 'maxVersion': 1.3, 'renegotiation': false}
+} | to_nice_json }}

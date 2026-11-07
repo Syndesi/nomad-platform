@@ -1,12 +1,17 @@
 ---
 # One certificate by CSR.
 # Input: cluster_tls_name (file base name), cluster_tls_cn, cluster_tls_sans (subjectAltName value),
-#        cluster_tls_eku. Files: <tls dir>/<name>.key|.pem and <name>.sans (what the cert was issued for).
+#        cluster_tls_eku, optional cluster_tls_bootstrap_only (a certificate that step-ca takes over: made only while there is none). Files: <tls dir>/<name>.key|.pem and <name>.sans (what the cert was issued for).
 - name: "{{ cluster_tls_name }}: is the cert still good?"
   ansible.builtin.shell: |
     d={{ cluster_tls_dir }}; n={{ cluster_tls_name }}
     [ -s "$d/$n.key" ] && [ -s "$d/$n.pem" ] || { echo missing; exit 0; }
+    {% if cluster_tls_bootstrap_only | default(false) | bool %}
+    echo ok; exit 0
+    {% endif %}
     [ "$(cat "$d/$n.sans" 2>/dev/null)" = {{ cluster_tls_sans | quote }} ] || { echo sans-changed; exit 0; }
+    # the last certificate of the file is the intermediate that signed it: a new intermediate (or a new PKI) renews everything
+    [ "$(awk '/BEGIN CERTIFICATE/{c=""} {c=c $0 "\n"} END{printf "%s", c}' "$d/$n.pem" | sha256sum | cut -d' ' -f1)" = {{ ((lookup('ansible.builtin.file', cluster_intermediate_cert) | trim) ~ '\n') | hash('sha256') | quote }} ] || { echo issuer-changed; exit 0; }
     openssl x509 -in "$d/$n.pem" -noout -checkend {{ cluster_leaf_renew_before_days * 86400 }} >/dev/null || { echo expiring; exit 0; }
     echo ok
   register: cluster_tls_state
@@ -64,12 +69,12 @@
           serverAuth: TLS Web Server Authentication
           clientAuth: TLS Web Client Authentication
 
-    - name: "{{ cluster_tls_name }}: sign with the cluster CA (on the controller, in memory)"
+    - name: "{{ cluster_tls_name }}: sign with the ansible intermediate (on the controller, in memory)"
       community.crypto.x509_certificate_pipe:
         csr_content: "{{ cluster_tls_csr.stdout }}"
         provider: ownca
-        ownca_content: "{{ lookup('ansible.builtin.file', cluster_ca_cert) }}"
-        ownca_privatekey_content: "{{ cluster_ca_key }}"
+        ownca_content: "{{ lookup('ansible.builtin.file', cluster_intermediate_cert) }}"
+        ownca_privatekey_content: "{{ cluster_intermediate_key }}"
         ownca_not_after: "+{{ cluster_leaf_valid_days }}d"
         ownca_not_before: "-5m"
       delegate_to: localhost
@@ -79,7 +84,8 @@
 
     - name: "{{ cluster_tls_name }}: certificate on the node"
       ansible.builtin.copy:
-        content: "{{ cluster_tls_signed.certificate }}"
+        # leaf + intermediate: a peer trusts the root only and builds the chain from what the server sends
+        content: "{{ cluster_tls_signed.certificate | trim }}\n{{ lookup('ansible.builtin.file', cluster_intermediate_cert) | trim }}\n"
         dest: "{{ cluster_tls_dir }}/{{ cluster_tls_name }}.pem.new"
         owner: root
         group: root
@@ -97,7 +103,7 @@
 
     - name: "{{ cluster_tls_name }}: remember that it changed"
       ansible.builtin.set_fact:
-        cluster_tls_node_changed: "{{ cluster_tls_node_changed | default(false) or cluster_tls_name in ['node', 'consul'] }}"
+        cluster_tls_node_changed: "{{ cluster_tls_node_changed | default(false) or cluster_tls_name in ['node', 'consul', 'consul-grpc'] }}"
 
 # also right for a key that exists from before (the owner is a setting)
 - name: "{{ cluster_tls_name }}: owner and mode of the key"

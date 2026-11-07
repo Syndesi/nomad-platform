@@ -69,7 +69,7 @@ table inet {{ cluster_firewall_table }} {
     iifname { "docker0", "nomad", "br-*" } accept
     ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } accept
     # new connections to a container that are not dnat'ed, i.e. routed straight to its ip (nomad's bridge has no protection of its own)
-    oifname { "docker0", "nomad", "br-*" } ct state new ct status != dnat drop
+    oifname { "docker0", "nomad", "br-*" } ct state new ct status & dnat == 0 drop
 {% if cluster_firewall_public_tcp_ports %}
     ct status dnat ct original proto-dst { {{ cluster_firewall_public_tcp_ports | join(', ') }} } accept
 {% endif %}

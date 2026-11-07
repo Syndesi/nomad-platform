@@ -81,3 +81,18 @@ data "consul_acl_token_secret_id" "service" {
 # ---- tokens: sensitive outputs ----------------------------------------------------------------------
 # They live in the (client-side encrypted) state and nowhere else; ansible reads them with
 # `tofu output -json` when it renders the agent configs.
+
+# ---- consul connect: intentions (default deny) -------------------------------------------------
+# step-ca is reachable through the mesh only. Only the service "traefik-acme" (traefik's group: its ACME client and the renewal of the service
+# certificates) may connect; everything else is denied by the explicit "*" source, whatever the ACL default policy is.
+resource "consul_config_entry" "stepca_intentions" {
+  count = var.stepca_enabled ? 1 : 0
+  name  = "step-ca"
+  kind  = "service-intentions"
+  config_json = jsonencode({
+    Sources = [
+      { Name = "traefik-acme", Action = "allow", Precedence = 9 },
+      { Name = "*", Action = "deny", Precedence = 1 },
+    ]
+  })
+}

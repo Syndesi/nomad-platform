@@ -3,11 +3,10 @@
 # `authelia storage user totp import` inside the allocation (the seeds on stdin). The seed is the truth: running it again changes nothing,
 # and a lost database is repaired by the next deploy. The result (the otpauth URI that goes into an authenticator app) is written to a
 # file of the cluster repo that git ignores.
-authelia_totp_users: "{{ authelia_users.keys() | list | intersect((authelia_totp_seeds | default({})).keys() | list) }}"
 authelia_totp_out_dir: "{{ cluster_dir }}/secrets/authelia"
 authelia_totp_env:
   NOMAD_ADDR: "https://127.0.0.1:{{ cluster_nomad_http_port }}"
   NOMAD_CACERT: "{{ cluster_tls_dir }}/ca.pem"
   NOMAD_TOKEN: "{{ cluster_nomad_ops_token }}"
-# the command prefix in the allocation (nomad alloc exec, then the authelia cli)
-authelia_totp_exec: [nomad, alloc, exec, -job, -task, authelia, authelia, authelia, storage, user, totp]
+# the command prefix (nomad alloc exec -job -task authelia <instance> authelia storage user totp, see instance.yml)
+authelia_totp_exec_base: [nomad, alloc, exec]

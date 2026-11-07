@@ -17,6 +17,15 @@
     validate: /usr/sbin/nft -c -f %s
   register: cluster_firewall_rules
 
+- name: Accept the published public ports in docker's FORWARD chain (DOCKER-USER)
+  ansible.builtin.template:
+    src: docker-forward.sh.j2
+    dest: "{{ cluster_firewall_file | dirname }}/docker-forward.sh"
+    owner: root
+    group: root
+    mode: "0755"
+  register: cluster_firewall_docker
+
 - name: systemd unit (loads the rules at boot)
   ansible.builtin.template:
     src: cluster-firewall.service.j2
@@ -57,6 +66,11 @@
   ansible.builtin.command: /usr/sbin/nft -f {{ cluster_firewall_file }}
   changed_when: true
   when: cluster_firewall_rules is changed or cluster_firewall_loaded.rc != 0
+
+- name: Apply the DOCKER-USER rules
+  ansible.builtin.command: /bin/sh {{ cluster_firewall_file | dirname }}/docker-forward.sh
+  changed_when: cluster_firewall_docker is changed
+  when: cluster_firewall_public_tcp_ports | length > 0
 
 # the service's state is "started" after this (systemd: oneshot with RemainAfterExit, openrc: state only); the rules are in
 # place already, loading them once more is a no-op

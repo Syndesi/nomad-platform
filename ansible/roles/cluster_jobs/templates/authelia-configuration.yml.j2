@@ -1,10 +1,11 @@
 # {{ ansible_managed }}
+# instance {{ authelia_inst.name }} (authelia_inst: name, port, domain = cookie domain, secrets, rules)
 theme: dark
 log:
   level: info
   format: json
 server:
-  address: 'tcp://:9091'
+  address: 'tcp://:{{ authelia_inst.port }}'
   # the image's own docker HEALTHCHECK needs a file in /app that authelia writes at startup; the root filesystem is read-only and nomad / consul
   # check /api/health themselves
   disable_healthcheck: true
@@ -29,7 +30,7 @@ server:
 # WebAuthn is off unless authelia_webauthn is true (registering a key needs the one-time code of the notifier, see README).
 totp:
   disable: false
-  issuer: {{ authelia_totp_issuer | to_json }}
+  issuer: {{ authelia_inst.issuer | to_json }}
   algorithm: SHA1
   digits: 6
   period: 30
@@ -40,7 +41,7 @@ totp:
   disable_reuse_security_policy: false
 webauthn:
   disable: {{ (not authelia_webauthn | bool) | lower }}
-  display_name: {{ authelia_totp_issuer | to_json }}
+  display_name: {{ authelia_inst.issuer | to_json }}
 default_2fa_method: totp
 # Failed logins are counted per USERNAME: whoever knows a name can lock that account for ban_time (an unknown name locks nothing).
 # So: keep the names unlisted, the bans short, the retries moderate.
@@ -53,9 +54,9 @@ access_control:
   rules:
     # traefik asks authelia about EVERY request of the websecure entry point (default middleware), the login portal's own names included
     - domain:
-        - {{ ('auth.' ~ cluster_domain) | to_json }}
+        - {{ ('auth.' ~ authelia_inst.domain) | to_json }}
       policy: bypass
-{% for rule in authelia_access_rules %}
+{% for rule in authelia_inst.rules %}
     - domain:
 {% for d in (rule.domain if rule.domain is not string else [rule.domain]) %}
         - {{ d | to_json }}
@@ -78,21 +79,21 @@ authentication_backend:
     path: /secrets/users.yml
 identity_validation:
   reset_password:
-    jwt_secret: {{ cluster_authelia_reset_password_jwt_secret | to_json }}
+    jwt_secret: {{ authelia_inst.jwt_secret | to_json }}
 session:
   # sessions are in memory (no redis): they end with the authelia process, a redeploy logs everybody out. The second factors do not (storage below).
-  secret: {{ cluster_authelia_session_secret | to_json }}
+  secret: {{ authelia_inst.session_secret | to_json }}
   inactivity: {{ authelia_session_inactivity }}
   expiration: {{ authelia_session_expiration }}
   remember_me: {{ authelia_session_remember_me }}
   cookies:
-    - domain: {{ cluster_domain | to_json }}
-      authelia_url: {{ ('https://auth.' ~ cluster_domain) | to_json }}
+    - domain: {{ authelia_inst.domain | to_json }}
+      authelia_url: {{ ('https://auth.' ~ authelia_inst.domain) | to_json }}
       same_site: lax
 storage:
-  encryption_key: {{ cluster_authelia_storage_encryption_key | to_json }}
+  encryption_key: {{ authelia_inst.storage_key | to_json }}
   local:
-    # the host volume "authelia" (/srv/authelia on the node, see jobs/authelia.nomad.hcl): totp secrets, devices, bans
+    # the host volume of the instance (data_volume, see jobs/authelia.nomad.hcl): totp secrets, devices, bans
     path: /data/db.sqlite3
 notifier:
   filesystem:

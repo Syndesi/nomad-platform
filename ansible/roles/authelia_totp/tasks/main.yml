@@ -1,54 +1,13 @@
 ---
-- name: Directory for the registrations on the controller (git-ignored, root of the repo only)
-  ansible.builtin.file:
-    path: "{{ authelia_totp_out_dir }}"
-    state: directory
-    mode: "0700"
-  delegate_to: localhost
-  become: false
-  run_once: true
-
-# The allocation may still be starting right after `nomad job run`: the job waited for a healthy deployment, but be patient anyway.
-# The seeds go in on stdin (`totp import`, yaml: the secret is the base64 of the base32 seed), never as an argument: a command line is
-# visible in the process list of the node. algorithm / digits / period are the values of authelia's totp section (authelia-configuration.yml.j2).
-- name: Register the TOTP secrets of the users in authelia (on stdin)
-  ansible.builtin.command:
-    argv: "{{ authelia_totp_exec + ['import', '/dev/stdin', '--config', '/secrets/configuration.yml'] }}"
-    stdin: |
-      totp_configurations:
-      {% for u in authelia_totp_users %}
-        - username: {{ u | to_json }}
-          issuer: {{ authelia_totp_issuer | to_json }}
-          algorithm: SHA1
-          digits: 6
-          period: 30
-          secret: {{ authelia_totp_seeds[u] | b64encode }}
-      {% endfor %}
-  environment: "{{ authelia_totp_env }}"
-  register: authelia_totp_result
-  retries: 10
-  delay: 3
-  until: authelia_totp_result.rc == 0
-  no_log: true
-  changed_when: false
-
-# the otpauth URIs (the registration for the authenticator app) are read back from the database; nothing secret on the command line here either
-- name: Read the registrations (otpauth URIs)
-  ansible.builtin.command:
-    argv: "{{ authelia_totp_exec + ['export', 'uri', '--config', '/secrets/configuration.yml'] }}"
-  environment: "{{ authelia_totp_env }}"
-  register: authelia_totp_uris
-  no_log: true
-  changed_when: false
-
-- name: Write the registration to the cluster repo (not committed)
-  ansible.builtin.copy:
-    content: "{{ authelia_totp_uris.stdout_lines | select('match', '^otpauth://totp/[^?]*:' ~ (item | regex_escape) ~ '[?]') | first }}\n"
-    dest: "{{ authelia_totp_out_dir }}/totp-{{ item }}.txt"
-    mode: "0600"
-  delegate_to: localhost
-  become: false
-  loop: "{{ authelia_totp_users }}"
+# Both authelia instances: the public one (cluster_domain) and authelia-internal (the zone behind the VPN, separate seeds).
+- name: Second factors of the users of one instance
+  ansible.builtin.include_tasks: instance.yml
+  vars:
+    authelia_totp_inst: "{{ inst }}"
+    authelia_totp_inst_users: "{{ authelia_users.keys() | list | intersect(inst.totp_seeds.keys() | list) }}"
+  loop: >-
+    {{ [{'name': 'authelia', 'issuer': authelia_totp_issuer, 'totp_seeds': authelia_totp_seeds | default({}), 'out_prefix': ''},
+        {'name': 'authelia-internal', 'issuer': authelia_totp_issuer_internal, 'totp_seeds': authelia_internal_totp_seeds | default({}), 'out_prefix': 'internal-'}] }}
   loop_control:
-    label: "totp-{{ item }}.txt"
-  no_log: true
+    loop_var: inst
+    label: "{{ inst.name }}"

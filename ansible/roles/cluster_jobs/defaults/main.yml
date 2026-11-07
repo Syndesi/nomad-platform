@@ -12,6 +12,9 @@ cluster_jobs_env:
 # ACME resolver name used inside traefik; '' = ingress cert from the cluster CA
 cluster_jobs_tls_resolver: "{{ '' if cluster_acme_ca == 'internal' else 'le' }}"
 
+# the jobs of this cluster (step-ca only when it is enabled)
+cluster_jobs_active: "{{ cluster_jobs_list if cluster_stepca_enabled | bool else cluster_jobs_list | rejectattr('name', 'eq', 'step-ca') | list }}"
+
 cluster_jobs_common_vars:
   datacenter: "{{ cluster_datacenter }}"
   domain: "{{ cluster_domain }}"
@@ -24,6 +27,24 @@ cluster_jobs_list:
       image: "{{ cluster_authelia_image }}"
       user: "{{ cluster_authelia_uid | string if cluster_authelia_uid | int != 0 else '' }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
+  - name: authelia-internal
+    file: authelia
+    vars:
+      image: "{{ cluster_authelia_image }}"
+      user: "{{ cluster_authelia_uid | string if cluster_authelia_uid | int != 0 else '' }}"
+      name: authelia-internal
+      port: "{{ cluster_authelia_internal_port }}"
+      data_volume: authelia-internal
+      tls_volume: authelia-internal-tls
+      tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia-internal') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
+  # step-ca before traefik: traefik's ACME client (resolver stepca) asks it for the certificates of the internal names when it starts
+  - name: step-ca
+    vars:
+      image: "{{ cluster_stepca_image }}"
+      dnsmasq_image: "{{ cluster_dnsmasq_image }}"
+      zone: "{{ cluster_internal_zone }}"
+      ingress_addr: "{{ hostvars[groups['cluster_ingress'][0]].cluster_ip }}"
+      user: "{{ cluster_stepca_uid | string }}"
   - name: traefik
     templates: true
     vars:
@@ -34,6 +55,20 @@ cluster_jobs_list:
       consul_port: "{{ cluster_consul_https_port }}"
       nomad_port: "{{ cluster_nomad_http_port }}"
       authelia_addr: "{{ hostvars[cluster_authelia_hosts[0]].cluster_ip }}:9091"
+      authelia_internal_addr: "{{ hostvars[cluster_authelia_hosts[0]].cluster_ip }}:{{ cluster_authelia_internal_port }}"
+      internal_zone: "{{ cluster_internal_zone }}"
+      vpn_host: "{{ cluster_vpn_host }}"
+      vpn_server_ip: "{{ cluster_vpn_server_ip }}"
+      vpn_subnet_prefix: "{{ cluster_vpn_subnet.split('/')[1] }}"
+      vpn_wg_port: "{{ cluster_vpn_wg_port }}"
+      vpn_wstunnel_port: "{{ cluster_vpn_wstunnel_port }}"
+      vpn_entrypoint_port: "{{ cluster_vpn_entrypoint_port }}"
+      vpn_wstunnel_user: "{{ cluster_vpn_uid | string }}"
+      wstunnel_image: "{{ cluster_wstunnel_image }}"
+      dnsmasq_image: "{{ cluster_dnsmasq_image }}"
+      stepca_acme_url: "{{ cluster_stepca_acme_url if cluster_stepca_enabled | bool else '' }}"
+      stepca_image: "{{ cluster_stepca_image }}"
+      stepca_cert_hours: "{{ cluster_stepca_cert_hours }}"
       wireguard: "{{ cluster_traefik_wireguard | bool | to_json }}"
       wireguard_image: "{{ cluster_wireguard_image }}"
       wireguard_bypass: "{{ cluster_wireguard_bypass }}"
@@ -45,3 +80,28 @@ cluster_jobs_list:
 authelia_regulation_max_retries: 5
 authelia_regulation_find_time: 5m
 authelia_regulation_ban_time: 5m
+
+# The two authelia instances (tofu-nomad writes the Nomad variable nomad/jobs/<name> of each, the template authelia-configuration.yml.j2 renders
+# the config from authelia_inst). The public one protects public apps on cluster_domain, the internal one the zone behind the VPN. Same users and
+# password hashes; own secrets, database, TOTP seeds, cookie, bans.
+cluster_jobs_authelia_instances:
+  - name: authelia
+    port: 9091
+    domain: "{{ cluster_domain }}"
+    issuer: "{{ authelia_totp_issuer }}"
+    rules: "{{ authelia_access_rules }}"
+    session_secret: "{{ cluster_authelia_session_secret }}"
+    storage_key: "{{ cluster_authelia_storage_encryption_key }}"
+    jwt_secret: "{{ cluster_authelia_reset_password_jwt_secret }}"
+    totp_seeds: "{{ authelia_totp_seeds | default({}) }}"
+    var_prefix: authelia
+  - name: authelia-internal
+    port: "{{ cluster_authelia_internal_port }}"
+    domain: "{{ cluster_internal_zone }}"
+    issuer: "{{ authelia_totp_issuer_internal }}"
+    rules: "{{ authelia_internal_access_rules }}"
+    session_secret: "{{ cluster_authelia_internal_session_secret }}"
+    storage_key: "{{ cluster_authelia_internal_storage_encryption_key }}"
+    jwt_secret: "{{ cluster_authelia_internal_reset_password_jwt_secret }}"
+    totp_seeds: "{{ authelia_internal_totp_seeds | default({}) }}"
+    var_prefix: authelia_internal

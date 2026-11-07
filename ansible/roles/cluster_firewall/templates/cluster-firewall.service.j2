@@ -8,7 +8,9 @@ Before=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f {{ cluster_firewall_file }}
+ExecStartPost=/bin/sh {{ cluster_firewall_file | dirname }}/docker-forward.sh
 ExecReload=/usr/sbin/nft -f {{ cluster_firewall_file }}
+ExecReload=/bin/sh {{ cluster_firewall_file | dirname }}/docker-forward.sh
 ExecStop=-/usr/sbin/nft delete table inet {{ cluster_firewall_table }}
 
 [Install]

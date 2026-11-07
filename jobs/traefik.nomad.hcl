@@ -5,10 +5,13 @@
 # variable like the secrets do: the consul token and the CA from nomad/jobs/traefik (tofu-nomad), the ingress cert + key
 # ("internal" mode, made on the ingress node) from nomad/jobs/traefik/traefik (role cluster_jobs).
 #
-# wireguard = true: traefik runs in the allocation's own bridge network, together with a wireguard client (prestart
-# sidecar, config from nomad/jobs/traefik/traefik/wireguard, readable by that task only). The tunnel lives in the
-# allocation's network namespace: no host service can drop it, and a restart of the allocation rebuilds it. Traefik then
-# reaches consul and nomad on the node's cluster address instead of 127.0.0.1.
+# Traefik runs in the allocation's own network namespace ("cni/egress"), with prestart sidecars that share it:
+#  - vpn       wireguard SERVER (wg1) for the internal services; config from nomad/jobs/traefik/traefik/vpn (task "vpn" only)
+#  - wstunnel  carries the wireguard udp over tcp/443 (routed by traefik with SNI passthrough), requires a client certificate, forwards to 127.0.0.1:51820 only
+#  - dnsmasq   dns for the VPN clients, on the wg1 address only
+#  - wireguard (wireguard = true) a wireguard CLIENT of an uplink, config from nomad/jobs/traefik/traefik/wireguard (task "wireguard" only)
+# The tunnels live in the allocation's network namespace: no host service can drop them, and a restart of the allocation rebuilds them. Traefik
+# reaches consul and nomad on the node's cluster address instead of 127.0.0.1. Entry points: websecure (public, authelia), vpn (internal, authelia-internal).
 
 variable "user" {
   type        = string
@@ -49,6 +52,47 @@ variable "wireguard_max_handshake_age" {
   type    = number
   default = 300
 }
+variable "internal_zone" {
+  type        = string
+  description = "the zone of the internal services (<cluster_name>.internal), reachable on the entry point vpn only"
+}
+variable "authelia_internal_addr" {
+  type        = string
+  description = "<cluster address>:<port> of authelia-internal (https), where the forward-auth middleware of the entry point vpn calls it"
+}
+variable "vpn_host" {
+  type        = string
+  description = "the name (SNI) the VPN clients connect to on the public 443: traefik passes it through to wstunnel"
+}
+variable "vpn_server_ip" {
+  type = string
+}
+variable "vpn_subnet_prefix" {
+  type    = number
+  default = 24
+}
+variable "vpn_wg_port" {
+  type    = number
+  default = 51820
+}
+variable "vpn_wstunnel_port" {
+  type    = number
+  default = 8444
+}
+variable "vpn_entrypoint_port" {
+  type    = number
+  default = 8443
+}
+variable "vpn_wstunnel_user" {
+  type    = string
+  default = "65532"
+}
+variable "wstunnel_image" {
+  type = string
+}
+variable "dnsmasq_image" {
+  type = string
+}
 # directory of the text templates next to this file (traefik/*.tpl). Absolute path, or relative to where `nomad job run` is started.
 variable "templates_dir" {
   type    = string
@@ -77,6 +121,22 @@ variable "tls_resolver" {
 variable "tls_fingerprint" {
   type    = string
   default = ""
+}
+# step-ca (the always-online intermediate CA, reached through the Consul mesh): the ACME directory of the resolver "stepca" for the names of the
+# internal zone ("" = no step-ca: the zone's wildcard certificate from the node is used). The service "traefik-acme" below is the mesh identity of
+# this group (the only one step-ca's intentions let in) and gives it the upstream 127.0.0.1:9000 = step-ca.
+variable "stepca_acme_url" {
+  type    = string
+  default = ""
+}
+variable "stepca_image" {
+  type    = string
+  default = ""
+}
+# lifetime of the certificates in hours: traefik renews them at about 2/3 (certificatesDuration)
+variable "stepca_cert_hours" {
+  type    = number
+  default = 168
 }
 variable "acme_server" {
   type    = string
@@ -118,10 +178,22 @@ job "traefik" {
       }
     }
 
+    # the certificate of the internal zone (wildcard from the ansible intermediate for now) and the key of wstunnel's, each only for its own task
+    volume "internal-tls" {
+      type      = "host"
+      read_only = true
+      source    = "internal-tls"
+    }
+    # wstunnel's certificate: read by wstunnel, renewed in place by the task vpn-renew (step-ca), made first by role cluster_tls / the deploy
+    volume "vpn-tls" {
+      type      = "host"
+      read_only = false
+      source    = "vpn-tls"
+    }
+
     network {
-      # host: no container network, no restriction. With wireguard the allocation has its own network: "cni/egress" (internet access, like
-      # the host network; nomad's plain "bridge" has none, see group_vars defaults.yml)
-      mode = var.wireguard ? "cni/egress" : "host"
+      # the allocation's own network: "cni/egress" (internet access, like the host network; nomad's plain "bridge" has none, see group_vars defaults.yml)
+      mode = "cni/egress"
       port "http" {
         static = 80
         to     = 80
@@ -169,6 +241,30 @@ job "traefik" {
         type     = "tcp"
         interval = "10s"
         timeout  = "3s"
+      }
+    }
+
+    # The mesh identity of this group, upstream only: step-ca (127.0.0.1:9000 in the namespace) for traefik's ACME client and the renewal of
+    # wstunnel's certificate. Consul's intentions decide who may talk to step-ca (tofu-consul): this service and nobody else. The port is nominal
+    # (nothing listens there and no intention lets anybody connect to this service).
+    dynamic "service" {
+      for_each = var.stepca_acme_url != "" ? ["stepca"] : []
+      content {
+        name     = "traefik-acme"
+        port     = "9"
+        provider = "consul"
+        tags     = []
+
+        connect {
+          sidecar_service {
+            proxy {
+              upstreams {
+                destination_name = "step-ca"
+                local_bind_port  = 9000
+              }
+            }
+          }
+        }
       }
     }
 
@@ -258,6 +354,217 @@ EOT
       }
     }
 
+    # ---- the VPN of the internal services (sidecars of the allocation: they share traefik's network namespace) ----------------------------------
+
+    # wireguard SERVER, interface wg1. It listens on udp 51820 in the namespace only (the port is not published), reached by wstunnel over loopback. The
+    # namespace's firewall (traefik/vpn.nft.tpl, loaded by PostUp of the config) lets the VPN reach tcp 443 (redirected to traefik's entry point vpn) and dns
+    # on the wg1 address, nothing else; ip forwarding is off, so nothing is routed anywhere. The config (private key, one peer with a preshared key per
+    # device) is only visible to this task.
+    task "vpn" {
+      driver = "docker"
+
+      lifecycle {
+        hook    = "prestart"
+        sidecar = true
+      }
+
+      template {
+        data        = <<EOT
+{{ with nomadVar "nomad/jobs/traefik/traefik/vpn" }}{{ .wg_conf }}{{ end }}
+EOT
+        destination = "secrets/wg/wg1.conf"
+        perms       = "0600"
+      }
+
+      template {
+        data        = file("${var.templates_dir}/vpn.nft.tpl")
+        destination = "local/vpn.nft"
+        perms       = "0644"
+      }
+
+      env {
+        TPL_VPN_PORT      = var.vpn_entrypoint_port
+        TPL_WSTUNNEL_PORT = var.vpn_wstunnel_port
+        TPL_WG_PORT       = var.vpn_wg_port
+      }
+
+      config {
+        image   = var.wireguard_image
+        cap_add = ["net_admin"]
+        sysctl = {
+          "net.ipv4.conf.all.src_valid_mark" = "1"
+          "net.ipv4.ip_forward"              = "0"
+        }
+        volumes = ["secrets/wg:/config/wg_confs", "local/vpn.nft:/vpn.nft:ro"]
+      }
+
+      resources {
+        cpu    = 50
+        memory = 64
+      }
+    }
+
+    # Renews wstunnel's certificate (issued by step-ca, 7 days) at about two thirds of its life, in place: wstunnel watches the files and reloads them.
+    # It reaches step-ca through the mesh upstream and authenticates with the certificate itself (no secret); the first certificate is issued by
+    # the deploy (`step ca certificate` in step-ca's allocation, role cluster_stepca).
+    dynamic "task" {
+      labels   = ["vpn-renew"]
+      for_each = var.stepca_acme_url != "" ? ["vpn-renew"] : []
+
+      content {
+        driver = "docker"
+        user   = var.vpn_wstunnel_user
+
+        lifecycle {
+          hook    = "poststart"
+          sidecar = true
+        }
+
+        # keeps trying while step-ca is not there (a restart of the node, an upgrade of the job): the certificate lasts a week
+        restart {
+          attempts = 20
+          interval = "30m"
+          delay    = "30s"
+          mode     = "delay"
+        }
+
+        volume_mount {
+          volume      = "vpn-tls"
+          destination = "/tls"
+          read_only   = false
+        }
+
+        template {
+          data        = "{{ with nomadVar \"nomad/jobs/traefik\" }}{{ .ca_cert }}{{ end }}"
+          destination = "secrets/ca.pem"
+          perms       = "0644"
+          uid         = parseint(var.vpn_wstunnel_user, 10)
+          gid         = parseint(var.vpn_wstunnel_user, 10)
+        }
+
+        config {
+          image      = var.stepca_image
+          entrypoint = ["/usr/local/bin/step"]
+          args = [
+            "ca", "renew", "--daemon",
+            "--ca-url", "https://127.0.0.1:9000",
+            "--root", "/secrets/ca.pem",
+            "--force",
+            "/tls/vpn.pem", "/tls/vpn.key",
+          ]
+          # the binary carries a file capability (net_bind_service): without it in the bounding set the exec fails
+          cap_drop        = ["ALL"]
+          cap_add         = ["NET_BIND_SERVICE"]
+          readonly_rootfs = true
+          mount {
+            type   = "tmpfs"
+            target = "/tmp"
+            tmpfs_options {
+              size = 8388608
+            }
+          }
+        }
+
+        resources {
+          cpu    = 50
+          memory = 48
+        }
+      }
+    }
+
+    # wstunnel carries the wireguard udp over a websocket in TLS. Traefik passes the connections for the name vpn_host through to it (SNI, no TLS
+    # termination in traefik), it requires a client certificate (mTLS, the cluster root as the CA: `task vpn:client` signs them) and forwards to
+    # 127.0.0.1:51820 and nowhere else (--restrict-to). It is a disguise, not the boundary: the boundary is wireguard.
+    task "wstunnel" {
+      driver = "docker"
+
+      user = var.vpn_wstunnel_user
+
+      lifecycle {
+        hook    = "prestart"
+        sidecar = true
+      }
+
+      volume_mount {
+        volume      = "vpn-tls"
+        destination = "/tls"
+        read_only   = true
+      }
+
+      template {
+        data        = <<EOT
+{{ with nomadVar "nomad/jobs/traefik" }}{{ .ca_cert }}{{ end }}
+EOT
+        destination = "secrets/ca.pem"
+        uid         = parseint(var.vpn_wstunnel_user, 10)
+        gid         = parseint(var.vpn_wstunnel_user, 10)
+      }
+
+      env {
+        RUST_LOG        = "info"
+        TLS_FINGERPRINT = var.tls_fingerprint
+      }
+
+      config {
+        image      = var.wstunnel_image
+        entrypoint = ["/home/app/wstunnel"]
+        args = [
+          "server", "wss://127.0.0.1:${var.vpn_wstunnel_port}",
+          "--restrict-to", "127.0.0.1:${var.vpn_wg_port}",
+          "--tls-certificate", "/tls/vpn.pem",
+          "--tls-private-key", "/tls/vpn.key",
+          "--tls-client-ca-certs", "/secrets/ca.pem",
+        ]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+      }
+
+      resources {
+        cpu    = 100
+        memory = 64
+      }
+    }
+
+    # dns for the VPN clients: *.<zone> and the zone itself resolve to the wg1 address (traefik's), everything else is NXDOMAIN, no recursion. Listens on
+    # that address only (bind-dynamic: it appears when the vpn task has brought wg1 up). Not the node's dnsmasq instances: they are host wide.
+    task "dnsmasq" {
+      driver = "docker"
+
+      lifecycle {
+        hook    = "prestart"
+        sidecar = true
+      }
+
+      template {
+        data        = <<EOT
+no-resolv
+no-hosts
+pid-file=
+user=root
+port=53
+listen-address=${var.vpn_server_ip}
+bind-dynamic
+address=/${var.internal_zone}/${var.vpn_server_ip}
+local=/#/
+EOT
+        destination = "local/dnsmasq.conf"
+      }
+
+      config {
+        image           = var.dnsmasq_image
+        entrypoint      = ["dnsmasq"]
+        args            = ["-k", "-C", "/local/dnsmasq.conf"]
+        cap_drop        = ["ALL"]
+        cap_add         = ["NET_BIND_SERVICE", "NET_ADMIN", "SETUID", "SETGID"]
+        readonly_rootfs = true
+      }
+
+      resources {
+        cpu    = 50
+        memory = 32
+      }
+    }
+
     task "traefik" {
       driver = "docker"
 
@@ -267,6 +574,12 @@ EOT
         volume      = "traefik"
         destination = "/acme"
         read_only   = false
+      }
+
+      volume_mount {
+        volume      = "internal-tls"
+        destination = "/tls-internal"
+        read_only   = true
       }
 
       dynamic "volume_mount" {
@@ -310,13 +623,21 @@ EOT
 
       # parameters of the templates above (jobs/traefik/*.tpl), read there with {{ env "..." }}
       env {
-        TPL_WIREGUARD     = var.wireguard
         TPL_DOMAIN        = var.domain
+        TPL_ZONE          = var.internal_zone
+        TPL_VPN_HOST      = var.vpn_host
+        TPL_VPN_PORT      = var.vpn_entrypoint_port
+        TPL_WSTUNNEL_PORT = var.vpn_wstunnel_port
+        TPL_AUTHELIA_INTERNAL_ADDR = var.authelia_internal_addr
         TPL_AUTHELIA_ADDR = var.authelia_addr
         TPL_METRICS_PORT  = var.metrics_port
         TPL_CONSUL_PORT   = var.consul_port
         TPL_NOMAD_PORT    = var.nomad_port
         TPL_TLS_RESOLVER  = var.tls_resolver
+        TPL_STEPCA_ACME_URL = var.stepca_acme_url
+        TPL_STEPCA_HOURS    = var.stepca_cert_hours
+        # lego (traefik's ACME client) trusts the cluster root in addition to the system roots: step-ca's own certificate is signed by it
+        LEGO_CA_CERTIFICATES = "/secrets/ca.pem"
         TPL_ACME_SERVER   = var.acme_server
         TPL_ACME_EMAIL    = var.acme_email
         TLS_FINGERPRINT   = var.tls_fingerprint
@@ -324,7 +645,6 @@ EOT
 
       config {
         image        = var.image
-        network_mode = var.wireguard ? null : "host"
         args         = ["--configFile=/secrets/traefik.yml"]
         # the internet edge: no capability but the one for ports 80 / 443 (not even needed as a non-root user, see cluster_traefik_uid),
         # a read-only root filesystem (config, data and certificates are mounts)

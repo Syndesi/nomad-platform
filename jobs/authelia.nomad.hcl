@@ -1,5 +1,7 @@
-# Authelia: the forward-auth in front of nomad / consul / traefik, with a second factor (TOTP).
-# Config and users live in the Nomad variable nomad/jobs/authelia (written by ansible role cluster_jobs from
+# Authelia: the forward-auth with a second factor (TOTP). Run twice (cluster_jobs_list): "authelia" for the public names (port 9091) and
+# "authelia-internal" for the zone behind the VPN (port 9092, variables name / port / data_volume / tls_volume): own config, secrets, database,
+# TOTP seeds and bans. The text below says "authelia" for either.
+# Config and users live in the Nomad variable nomad/jobs/<name> (written by tofu-nomad from
 # the cluster's authelia.yml + secrets), so no secret is part of this spec.
 # The sqlite database (totp secrets, devices, bans) is on the host volume "authelia" (/srv/authelia on the node, made by the nomad role),
 # so the job is bound to the nodes that have it (client meta authelia = true: the servers by default) and survives redeployments.
@@ -17,6 +19,24 @@ variable "image" {
 }
 variable "domain" {
   type = string
+}
+# job and service name, and the Nomad variable (nomad/jobs/<name>) with the config
+variable "name" {
+  type    = string
+  default = "authelia"
+}
+variable "port" {
+  type    = number
+  default = 9091
+}
+# host volumes (client config, fragment 55-authelia.hcl): the database folder and the folder with the certificate
+variable "data_volume" {
+  type    = string
+  default = "authelia"
+}
+variable "tls_volume" {
+  type    = string
+  default = "authelia-tls"
 }
 # The user id authelia runs as (it owns the database folder and reads its key); "" = the image's own user (root)
 variable "user" {
@@ -36,6 +56,8 @@ variable "tls_resolver" {
 }
 
 job "authelia" {
+  id          = var.name
+  name        = var.name
   datacenters = [var.datacenter]
   type        = "service"
 
@@ -47,21 +69,21 @@ job "authelia" {
   group "authelia" {
     network {
       port "http" {
-        static = 9091
+        static = var.port
       }
     }
 
     volume "authelia" {
       type      = "host"
       read_only = false
-      source    = "authelia"
+      source    = var.data_volume
     }
 
     # the server certificate of authelia (https), made on the node: the key never leaves it
     volume "authelia-tls" {
       type      = "host"
       read_only = true
-      source    = "authelia-tls"
+      source    = var.tls_volume
     }
 
     update {
@@ -69,7 +91,7 @@ job "authelia" {
     }
 
     service {
-      name     = "authelia"
+      name     = var.name
       port     = "http"
       provider = "consul"
       # No traefik tags on purpose: the router, the forward-auth middleware and the service of authelia are in traefik's file provider
@@ -81,7 +103,7 @@ job "authelia" {
         protocol = "https"
         # the check is made by the consul agent of the node, which verifies the certificate with the system roots (role cluster_tls puts the cluster CA there); the
         # address is the node's, the name is one of the names in the certificate
-        tls_server_name = "authelia.service.consul"
+        tls_server_name = "${var.name}.service.consul"
         path            = "/api/health"
         interval        = "10s"
         timeout         = "3s"
@@ -111,7 +133,7 @@ job "authelia" {
 
       template {
         data        = <<EOT
-{{ with nomadVar "nomad/jobs/authelia" }}{{ .configuration }}{{ end }}
+{{ with nomadVar "nomad/jobs/${var.name}" }}{{ .configuration }}{{ end }}
 EOT
         destination = "secrets/configuration.yml"
         perms       = "0600"
@@ -122,7 +144,7 @@ EOT
 
       template {
         data        = <<EOT
-{{ with nomadVar "nomad/jobs/authelia" }}{{ .users }}{{ end }}
+{{ with nomadVar "nomad/jobs/${var.name}" }}{{ .users }}{{ end }}
 EOT
         destination = "secrets/users.yml"
         perms       = "0600"

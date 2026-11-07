@@ -12,8 +12,9 @@ Every cluster has its own repo with only its data, and includes this one as the 
 Four services on every cluster:
 
 - **Nomad** runs the workloads (docker containers). **Consul** is service catalogue, DNS and service mesh.
-- **Traefik** is the ingress (https, `nomad.<domain>`, `consul.<domain>`, your services). **Authelia** is the login in front of the
-  UIs: password and TOTP, for every rule.
+- **Traefik** is the ingress (https, your services). The ops UIs (`nomad.`, `consul.`, `traefik.`, `auth.<cluster_name>.internal`) are only
+  reachable through a **WireGuard VPN** (over tcp/443 with wstunnel) behind a second **Authelia** (password and TOTP); certificates of the
+  internal names come from **step-ca** (7 days, renewed automatically). See `docs/reference.md`.
 - One cluster CA, ACLs everywhere (no anonymous access), workload identity instead of static tokens, a nftables firewall, hardened
   sshd (key only, no root), secrets encrypted with sops/age, backups of the cluster state.
 

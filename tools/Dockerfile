@@ -10,13 +10,15 @@
 #  - socat         tcp tunnel to the consul/nomad api of a node (scripts/tunnel.sh) for the tofu-consul / tofu-nomad stages
 #  - sops + age    secrets at rest (ansible reads them through community.sops, tofu state encryption gets its passphrase from them)
 #  - ansible-lint, yamllint, shellcheck   `task lint` (nomad fmt runs the built nomad binary from /artifacts)
+#  - wireguard-tools  key pairs of the VPN (scripts/vpn.sh)
+#  - step-cli         provisioner keys of step-ca (scripts/stepca.sh)
 #  - bash, jq, curl for ad-hoc work inside `task shell`
 # no default: compose passes it from the cluster's .env
 ARG ALPINE_VERSION
 FROM alpine:${ALPINE_VERSION}
 
 RUN apk add --no-cache ansible-core bash ca-certificates curl incus-client jq openssl py3-cryptography socat \
-    sops age ansible-lint yamllint shellcheck openssh-client
+    sops age ansible-lint yamllint shellcheck openssh-client wireguard-tools py3-yaml step-cli
 COPY --from=tofu /usr/local/bin/tofu /usr/local/bin/tofu
 
 ENV ANSIBLE_COLLECTIONS_PATH=/opt/ansible/collections

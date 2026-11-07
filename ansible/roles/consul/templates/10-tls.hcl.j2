@@ -13,8 +13,9 @@ tls {
     verify_server_hostname = true
   }
   grpc {
-    cert_file = "{{ cluster_tls_dir }}/consul.pem"
-    key_file = "{{ cluster_tls_dir }}/consul.key"
+    # a certificate of its own, without ip addresses: envoy cannot verify chains with ip name constraints (role cluster_tls)
+    cert_file = "{{ cluster_tls_dir }}/consul-grpc.pem"
+    key_file = "{{ cluster_tls_dir }}/consul-grpc.key"
     verify_incoming = false
   }
   https {

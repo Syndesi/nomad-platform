@@ -25,22 +25,33 @@ check "nomad: a leader is elected"            "nomad server members | awk 'NR>1 
 # a reinstalled node leaves its old (down) entry until nomad's node gc, so: enough ready nodes, not "all"
 check "nomad: all $clients clients ready"          "[ \$(nomad node status | grep -c ' ready *\$') -ge $clients ] && echo yes" yes
 check "nomad: authelia running"               "nomad job status authelia | grep -c 'running'" 2
+check "nomad: authelia-internal running"      "nomad job status authelia-internal | grep -c 'running'" 2
 check "nomad: traefik running"                "nomad job status traefik | grep -c 'running'" 2
-check "consul: workload identity registered the services" "consul catalog services | grep -cx -e authelia -e traefik" 2
+check "consul: workload identity registered the services" "consul catalog services | grep -cx -e authelia -e authelia-internal -e traefik" 3
+stepca=$(cvar cluster_stepca_enabled)
+if [ "$stepca" = True ] || [ "$stepca" = true ]; then
+  check "nomad: step-ca running"                "nomad job status step-ca | grep -c 'running'" 2
+  check "consul: step-ca and its sidecar are passing" "consul catalog services | grep -cx -e step-ca -e step-ca-sidecar-proxy" 2
+fi
+# the ops UIs are not on the public entry point any more (they live in the zone behind the VPN)
 for h in nomad consul traefik; do
-  check "ingress: $h.$domain asks for a login (302)" "curl -sk -o /dev/null -w '%{http_code}' --resolve $h.$domain:443:127.0.0.1 https://$h.$domain/" 302
+  check "ingress: $h.$domain is not published (404)" "curl -sk -o /dev/null -w '%{http_code}' --resolve $h.$domain:443:127.0.0.1 https://$h.$domain/" 404
 done
-# the ops names accept the hybrid post-quantum key exchange and nothing else
-for h in nomad consul traefik auth; do
-  check "ingress: $h.$domain takes X25519MLKEM768"  "echo | openssl s_client -connect 127.0.0.1:443 -servername $h.$domain -tls1_3 -groups X25519MLKEM768 >/dev/null 2>&1 && echo accepted || echo refused" accepted
-  check "ingress: $h.$domain refuses X25519 alone"  "echo | openssl s_client -connect 127.0.0.1:443 -servername $h.$domain -tls1_3 -groups X25519 >/dev/null 2>&1 && echo accepted || echo refused" refused
-done
+# the portal accepts the hybrid post-quantum key exchange and nothing else
+check "ingress: auth.$domain takes X25519MLKEM768"  "echo | openssl s_client -connect 127.0.0.1:443 -servername auth.$domain -tls1_3 -groups X25519MLKEM768 >/dev/null 2>&1 && echo accepted || echo refused" accepted
+check "ingress: auth.$domain refuses X25519 alone"  "echo | openssl s_client -connect 127.0.0.1:443 -servername auth.$domain -tls1_3 -groups X25519 >/dev/null 2>&1 && echo accepted || echo refused" refused
 check "ingress: auth.$domain answers"         "curl -sk -o /dev/null -w '%{http_code}' --resolve auth.$domain:443:127.0.0.1 https://auth.$domain/" 200
 if [ "$(cvar cluster_acme_ca)" = internal ]; then
-  check "ingress cert is from the cluster CA"   "echo | openssl s_client -connect 127.0.0.1:443 -servername nomad.$domain 2>/dev/null | openssl x509 -noout -issuer | grep -c 'CN *= *.* cluster CA'" 1
+  check "ingress cert is from the cluster CA"   "echo | openssl s_client -connect 127.0.0.1:443 -servername auth.$domain 2>/dev/null | openssl x509 -noout -issuer | grep -c 'CN *= *.* ansible intermediate'" 1
 else
-  check "ingress cert is from the ACME CA ($(cvar cluster_acme_ca))" "echo | openssl s_client -connect 127.0.0.1:443 -servername nomad.$domain 2>/dev/null | openssl x509 -noout -issuer | grep -c -E \"Let's Encrypt|STAGING\"" 1
+  check "ingress cert is from the ACME CA ($(cvar cluster_acme_ca))" "echo | openssl s_client -connect 127.0.0.1:443 -servername auth.$domain 2>/dev/null | openssl x509 -noout -issuer | grep -c -E \"Let's Encrypt|STAGING\"" 1
 fi
+# the VPN: the gate (wstunnel) answers on the public 443 for its name and wants a client certificate; nothing of the VPN is on any other port
+vpnhost=$(cvar cluster_vpn_host)
+check "vpn: $vpnhost refuses a client without certificate" "curl -sk -o /dev/null --max-time 8 --resolve $vpnhost:443:127.0.0.1 https://$vpnhost/ >/dev/null 2>&1 && echo accepted || echo refused" refused
+for p in 8443 8444 51820 9000; do
+  check "vpn: port $p is not open on the node" "(echo | timeout 2 nc 127.0.0.1 $p >/dev/null 2>&1 && echo open) || echo closed" closed
+done
 check "dns: authelia.service.consul resolves" "getent hosts authelia.service.consul | wc -l" 1
 # the scripts run unprivileged; what needs root (docker, chronyc, nft) goes through ansible (cluster_root: become, with the password)
 root_check() { # <description> <node> <command as root> <expected stdout (grep -x)>
@@ -49,6 +60,15 @@ root_check() { # <description> <node> <command as root> <expected stdout (grep -
   if printf '%s\n' "$out" | grep -qx -- "$4"; then printf 'ok    %s\n' "$1"; else printf 'FAIL  %s (got: %s)\n' "$1" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-120)"; fail=1; fi
 }
 root_check "ntp: clock is synchronized on $server" "$server" "{ chronyc tracking 2>/dev/null | grep -q '^Leap status *: Normal' || timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -qx yes; } && echo yes" yes
+
+if [ "$stepca" = True ] || [ "$stepca" = true ]; then
+  ing=$(inventory_group cluster_ingress | head -1)
+  root_check "step-ca: wstunnel's certificate is from step-ca, valid for another day" "$ing" "{ openssl x509 -in $(cvar cluster_vpn_tls_dir)/vpn.pem -noout -issuer | grep -q 'stepca intermediate' && openssl x509 -in $(cvar cluster_vpn_tls_dir)/vpn.pem -noout -checkend 86400 >/dev/null && echo yes; } || echo no" yes
+  root_check "step-ca: traefik holds a certificate for every internal name" "$ing" "[ \$(jq '[.stepca.Certificates[]?.domain.main] | length' /var/lib/nomad/volumes/traefik/acme-stepca.json 2>/dev/null || echo 0) -ge 4 ] && echo yes || echo no" yes
+fi
+# client certificates of the VPN devices that expire soon
+warn=$("$BASE/scripts/vpn.sh" check 2>/dev/null || true)
+if [ -n "$warn" ]; then printf 'WARN  %s\n' "$warn"; else echo "ok    vpn: no client certificate expires within $(cvar cluster_vpn_client_warn_days) days"; fi
 
 # dns is what everything else hangs on: check it on EVERY node, as the node itself and (clients) from a container
 for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; } | sort -u); do
@@ -166,5 +186,22 @@ if [ "${1:-}" = connect ]; then
   out=$(mgmt "nomad alloc exec -task client $alloc wget -qO- -T 5 http://127.0.0.1:9001/" 2>&1)
   if printf '%s' "$out" | grep -q count; then echo "FAIL  denied intention still lets traffic through"; fail=1; else echo "ok    deny intention blocks the request"; fi
   mgmt "nomad job stop -purge connect-test >/dev/null; consul intention delete count-client count-api >/dev/null 2>&1; rm -f /tmp/connect.nomad.hcl; true"
+  stepca=$(cvar cluster_stepca_enabled)
+  if [ "$stepca" = True ] || [ "$stepca" = true ]; then
+    # a workload without an intention to step-ca must not get an answer from it (default deny)
+    mgmt "cat > /tmp/stepca-probe.nomad.hcl" < "$BASE/tests/stepca-probe.nomad.hcl"
+    mgmt "nomad job run -detach -var datacenter=$(cvar cluster_datacenter) /tmp/stepca-probe.nomad.hcl >/dev/null 2>&1; true"
+    pa=""; out=""
+    for _ in $(seq 30); do
+      pa=$(mgmt "nomad job allocs -json stepca-probe | jq -r 'sort_by(.CreateTime) | last | .ID // empty'")
+      out=$(mgmt "nomad alloc logs -task curl $pa 2>/dev/null" 2>/dev/null)
+      printf '%s' "$out" | grep -q DONE && break
+      sleep 5
+    done
+    if ! printf '%s' "$out" | grep -q DONE; then echo "FAIL  step-ca probe did not finish"; fail=1
+    elif printf '%s' "$out" | grep -q -E 'HTTP/|"newNonce"'; then echo "FAIL  a workload without an intention reached step-ca: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-100)"; fail=1
+    else echo "ok    a workload without an intention gets no answer from step-ca"; fi
+    mgmt "nomad job stop -purge stepca-probe >/dev/null 2>&1; rm -f /tmp/stepca-probe.nomad.hcl; true"
+  fi
 fi
 exit $fail

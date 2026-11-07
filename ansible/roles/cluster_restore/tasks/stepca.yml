@@ -1,0 +1,61 @@
+---
+# step-ca's database from the backup, onto the node of the job, before the job starts. A backup without it is not an error: step-ca starts with an empty
+# database and traefik asks for the certificates of the internal names again (the issued ones keep working until they expire).
+- name: The backup has the database of step-ca
+  ansible.builtin.stat:
+    path: "{{ cluster_restore_dir }}/step-ca-db.tar.age"
+  delegate_to: localhost
+  become: false
+  register: cluster_restore_stepca_file
+
+- name: Say what is not restored
+  ansible.builtin.debug:
+    msg: "no step-ca database in the backup: step-ca starts empty, traefik asks for its certificates again"
+  when: not cluster_restore_stepca_file.stat.exists
+
+- name: Database of step-ca
+  when: cluster_restore_stepca_file.stat.exists
+  block:
+    - name: Decrypt on the controller (tmpfs)
+      ansible.builtin.shell: >-
+        set -o pipefail; umask 077;
+        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/step-ca-db.tar.age') | quote }} > {{ (cluster_run_dir ~ '/restore-step-ca-db.tar') | quote }}
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Copy to the node
+      ansible.builtin.copy:
+        src: "{{ cluster_run_dir }}/restore-step-ca-db.tar"
+        dest: "{{ cluster_restore_node_dir }}.step-ca-db.tar"
+        mode: "0600"
+        owner: root
+        group: root
+
+    - name: The database folder exists
+      ansible.builtin.file:
+        path: "{{ cluster_stepca_dir }}"
+        state: directory
+        owner: "{{ cluster_stepca_uid | int }}"
+        group: "{{ cluster_stepca_uid | int }}"
+        mode: "0700"
+
+    - name: Unpack into the database folder (plain tar, busybox has no GNU tar for unarchive)
+      ansible.builtin.shell: >-
+        set -e; tar -xf {{ (cluster_restore_node_dir ~ '.step-ca-db.tar') | quote }} -C {{ cluster_stepca_dir | quote }};
+        chown -R {{ cluster_stepca_uid | int }}:{{ cluster_stepca_uid | int }} {{ cluster_stepca_dir | quote }}
+      changed_when: true
+  always:
+    - name: Remove the copy from the node
+      ansible.builtin.file:
+        path: "{{ cluster_restore_node_dir }}.step-ca-db.tar"
+        state: absent
+
+    - name: Remove the clear-text copy from the controller
+      ansible.builtin.file:
+        path: "{{ cluster_run_dir }}/restore-step-ca-db.tar"
+        state: absent
+      delegate_to: localhost
+      become: false

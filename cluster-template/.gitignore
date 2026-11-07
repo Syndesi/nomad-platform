@@ -12,3 +12,6 @@ state/*/.terraform/
 backups/
 # the local proxy of `task proxy:up`: session cookie of the authelia login
 .proxy/
+# client files of the VPN devices (wireguard private keys, client certificate keys): `task vpn:client`
+secrets/vpn/*
+!secrets/vpn/.gitkeep

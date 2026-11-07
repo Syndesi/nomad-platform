@@ -25,3 +25,9 @@ variable "nodes" {
   description = "Every cluster node name: each gets a consul agent token (node identity)"
   type        = list(string)
 }
+
+variable "stepca_enabled" {
+  description = "step-ca runs as a job: the intentions that let only traefik's group reach it"
+  type        = bool
+  default     = false
+}

@@ -23,11 +23,20 @@
   connection: local
   gather_facts: false
   tasks:
-    - name: CA validity
+    - name: CA validity (root, intermediates)
       community.crypto.x509_certificate_info:
-        path: "{{ cluster_ca_cert }}"
+        path: "{{ item.path }}"
+      loop:
+        - { name: root, path: "{{ cluster_ca_cert }}" }
+        - { name: ansible intermediate, path: "{{ cluster_intermediate_cert }}" }
+        - { name: step-ca intermediate, path: "{{ cluster_stepca_intermediate_cert }}" }
+      loop_control:
+        label: "{{ item.name }}"
       register: pki_info_ca
 
     - name: Report
       ansible.builtin.debug:
-        msg: "CA valid until {{ pki_info_ca.not_after }}"
+        msg: "{{ item.item.name }} valid until {{ item.not_after }}"
+      loop: "{{ pki_info_ca.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

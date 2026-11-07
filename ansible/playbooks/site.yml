@@ -149,7 +149,7 @@
       ansible.builtin.assert:
         that:
           - cluster_consul_gossip_key is defined
-          - cluster_ca_key is defined
+          - cluster_intermediate_key is defined
         fail_msg: "Run `task age:init`, `task pki:ca` and `task secrets:init` first."
         quiet: true
 
@@ -157,10 +157,36 @@
       ansible.builtin.assert:
         that:
           - authelia_access_rules | rejectattr('policy', 'in', ['two_factor', 'deny', 'bypass']) | list | length == 0 or cluster_authelia_allow_weaker_policies | bool
+          - authelia_internal_access_rules | rejectattr('policy', 'in', ['two_factor', 'deny', 'bypass']) | list | length == 0 or cluster_authelia_allow_weaker_policies | bool
           - authelia_users | difference((authelia_totp_seeds | default({})).keys() | list) | length == 0
+          - authelia_users | difference((authelia_internal_totp_seeds | default({})).keys() | list) | length == 0
+          - cluster_authelia_internal_session_secret is defined
         fail_msg: >-
-          Every authelia_access_rules entry must have policy two_factor, deny or bypass (a public route; first_factor alone needs cluster_authelia_allow_weaker_policies: true), and every
-          user needs a TOTP seed: `task authelia:seed -- <user>` (users set with `task authelia:user` get one). No first factor alone anywhere.
+          Every authelia_access_rules / authelia_internal_access_rules entry must have policy two_factor, deny or bypass (a public route; first_factor alone needs cluster_authelia_allow_weaker_policies: true), and every
+          user needs a TOTP seed: `task authelia:seed -- <user>` (users set with `task authelia:user` get one for each of the two authelia instances; a missing authelia_internal secret: `task secrets:ensure`). No first factor alone anywhere.
+        quiet: true
+
+    - name: The VPN has its keys (task vpn:init)
+      ansible.builtin.assert:
+        that: cluster_vpn_server_private_key is defined
+        fail_msg: "No VPN server key yet: run `task vpn:init` (once), then `task vpn:client -- <device>` for every device that connects."
+        quiet: true
+
+    - name: The key material of step-ca exists (task stepca:init)
+      ansible.builtin.assert:
+        that:
+          - cluster_stepca_password is defined
+          - cluster_stepca_provisioners is defined
+          - cluster_stepca_hosts | length == 1
+        fail_msg: "No key material for step-ca yet: run `task stepca:init` (once, safe to repeat), or set cluster_stepca_enabled: false. A node for it: a server with the client role."
+        quiet: true
+      when: cluster_stepca_enabled | bool
+
+    - name: The VPN subnet is a /24
+      ansible.builtin.assert:
+        that:
+          - cluster_vpn_subnet.endswith('.0/24')
+        fail_msg: "cluster_vpn_subnet ({{ cluster_vpn_subnet }}) must be a x.y.z.0/24 (the server is .1), distinct from the other clusters you connect to at the same time."
         quiet: true
 
     - name: The backup to restore is complete (cluster_restore_dir)
@@ -372,6 +398,7 @@
           consul_token: "{{ cluster_consul_ops_token }}"
           datacenter: "{{ cluster_datacenter }}"
           nodes: "{{ (groups['cluster_servers'] + groups['cluster_clients']) | unique }}"
+          stepca_enabled: "{{ cluster_stepca_enabled | bool }}"
 
 # The agent tokens exist now: servers write them into their config (a restart only if it changed),
 # clients join with theirs.
@@ -469,11 +496,25 @@
   become: true
   gather_facts: false
   tasks:
-    - name: Authelia folder of the backup
+    - name: Authelia folders of the backup (both instances)
       ansible.builtin.include_role:
         name: cluster_restore
         tasks_from: authelia
+      vars:
+        cluster_restore_inst: "{{ restore_inst }}"
+      loop:
+        - { name: authelia, dir: "{{ cluster_authelia_dir }}" }
+        - { name: authelia-internal, dir: "{{ cluster_authelia_internal_dir }}" }
+      loop_control:
+        loop_var: restore_inst
+        label: "{{ restore_inst.name }}"
       when: cluster_restore_dir | length > 0 and inventory_hostname in cluster_authelia_hosts
+
+    - name: Step-ca database from the backup
+      ansible.builtin.include_role:
+        name: cluster_restore
+        tasks_from: stepca
+      when: cluster_restore_dir | length > 0 and cluster_stepca_enabled | bool and inventory_hostname in cluster_stepca_hosts
 
 - name: Nomad clients
   hosts: cluster_clients:!cluster_servers

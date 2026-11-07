@@ -10,10 +10,20 @@
   delegate_to: "{{ item.host }}"
   loop: >-
     {{ (cluster_authelia_hosts | intersect(groups['cluster_clients'] | default([]))
-          | map('community.general.dict_kv', 'host') | map('combine', {'dir': cluster_authelia_tls_dir, 'name': 'authelia', 'job': 'authelia'}) | list)
+          | map('community.general.dict_kv', 'host')
+          | map('combine', {'dir': cluster_authelia_tls_dir, 'name': 'authelia', 'job': 'authelia'}) | list)
+       + (cluster_authelia_hosts | intersect(groups['cluster_clients'] | default([]))
+          | map('community.general.dict_kv', 'host')
+          | map('combine', {'dir': cluster_authelia_internal_tls_dir, 'name': 'authelia', 'job': 'authelia-internal'}) | list)
        + ((groups['cluster_ingress'] | default([]))
           | map('community.general.dict_kv', 'host') | map('combine', {'dir': cluster_ingress_tls_dir, 'name': 'ingress', 'job': 'traefik'}) | list
-          if cluster_acme_ca == 'internal' else []) }}
+          if cluster_acme_ca == 'internal' else [])
+       + ((groups['cluster_ingress'] | default([]))
+          | map('community.general.dict_kv', 'host') | map('combine', {'dir': cluster_internal_tls_dir, 'name': 'internal', 'job': 'traefik'}) | list
+          if not cluster_stepca_enabled | bool else [])
+       + ((groups['cluster_ingress'] | default([]))
+          | map('community.general.dict_kv', 'host') | map('combine', {'dir': cluster_vpn_tls_dir, 'name': 'vpn', 'job': 'traefik'}) | list
+          if not cluster_stepca_enabled | bool else []) }}
   loop_control:
     label: "{{ item.name }} on {{ item.host }}"
   register: cluster_jobs_fingerprints
@@ -51,10 +61,10 @@
 
 - name: Job files on the server
   ansible.builtin.copy:
-    src: "{{ cluster_jobs_local_dir }}/{{ item.name }}.nomad.hcl"
-    dest: "{{ cluster_jobs_remote_dir }}/{{ item.name }}.nomad.hcl"
+    src: "{{ cluster_jobs_local_dir }}/{{ item.file | default(item.name) }}.nomad.hcl"
+    dest: "{{ cluster_jobs_remote_dir }}/{{ item.file | default(item.name) }}.nomad.hcl"
     mode: "0644"
-  loop: "{{ cluster_jobs_list }}"
+  loop: "{{ cluster_jobs_active }}"
   loop_control:
     label: "{{ item.name }}"
 
@@ -65,13 +75,13 @@
     dest: "{{ cluster_jobs_remote_dir }}/{{ item.name }}/"
     mode: "0644"
     directory_mode: "0755"
-  loop: "{{ cluster_jobs_list | selectattr('templates', 'defined') | list }}"
+  loop: "{{ cluster_jobs_active | selectattr('templates', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }}"
 
 - name: Run the jobs
   ansible.builtin.include_tasks: job.yml
-  loop: "{{ cluster_jobs_list }}"
+  loop: "{{ cluster_jobs_active }}"
   loop_control:
     loop_var: cluster_jobs_item
     label: "{{ cluster_jobs_item.name }}"

@@ -4,7 +4,7 @@
 # Current backups hold an SQL dump (authelia-<node>.sql.age), replayed into a new db.sqlite3; backups of older versions hold the folder as a tar.
 - name: The backup has the authelia database of this node
   ansible.builtin.stat:
-    path: "{{ cluster_restore_dir }}/authelia-{{ inventory_hostname }}.{{ item }}.age"
+    path: "{{ cluster_restore_dir }}/{{ cluster_restore_inst.name }}-{{ inventory_hostname }}.{{ item }}.age"
   loop: [sql, tar]
   delegate_to: localhost
   become: false
@@ -17,7 +17,7 @@
 
 - name: Say what is not restored
   ansible.builtin.debug:
-    msg: "no authelia database for {{ inventory_hostname }} in the backup: the second factors are registered again from the seeds"
+    msg: "no {{ cluster_restore_inst.name }} database for {{ inventory_hostname }} in the backup: the second factors are registered again from the seeds"
   when: cluster_restore_authelia_form == ''
 
 - name: Authelia database
@@ -34,7 +34,7 @@
     - name: Decrypt on the controller (tmpfs)
       ansible.builtin.shell: >-
         set -o pipefail; umask 077;
-        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/authelia-' ~ inventory_hostname ~ '.' ~ cluster_restore_authelia_form ~ '.age') | quote }}
+        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/' ~ cluster_restore_inst.name ~ '-' ~ inventory_hostname ~ '.' ~ cluster_restore_authelia_form ~ '.age') | quote }}
         > {{ (cluster_run_dir ~ '/restore-authelia-' ~ inventory_hostname ~ '.' ~ cluster_restore_authelia_form) | quote }}
       args:
         executable: /bin/bash
@@ -59,20 +59,20 @@
 
     - name: Replay the SQL dump into a new database (throwaway container, no network)
       ansible.builtin.shell: >-
-        set -e; umask 077; rm -f {{ cluster_authelia_dir | quote }}/db.sqlite3 {{ cluster_authelia_dir | quote }}/db.sqlite3-*;
-        docker run --rm --network none --user 0 -v {{ cluster_authelia_dir | quote }}:/data -v {{ cluster_restore_node_dir }}/authelia.sql:/in.sql:ro
+        set -e; umask 077; rm -f {{ cluster_restore_inst.dir | quote }}/db.sqlite3 {{ cluster_restore_inst.dir | quote }}/db.sqlite3-*;
+        docker run --rm --network none --user 0 -v {{ cluster_restore_inst.dir | quote }}:/data -v {{ cluster_restore_node_dir }}/authelia.sql:/in.sql:ro
         --entrypoint sqlite3 {{ cluster_sqlite_image | quote }} /data/db.sqlite3 ".read /in.sql"
       when: cluster_restore_authelia_form == 'sql'
       changed_when: true
 
     - name: The database belongs to the user authelia runs as
-      ansible.builtin.command: chown -R {{ cluster_authelia_uid | int }}:{{ cluster_authelia_uid | int }} {{ cluster_authelia_dir }}
+      ansible.builtin.command: chown -R {{ cluster_authelia_uid | int }}:{{ cluster_authelia_uid | int }} {{ cluster_restore_inst.dir }}
       changed_when: true
 
     - name: Unpack into the authelia folder (backup of an older version)
       ansible.builtin.unarchive:
         src: "{{ cluster_restore_node_dir }}/authelia.tar"
-        dest: "{{ cluster_authelia_dir }}"
+        dest: "{{ cluster_restore_inst.dir }}"
         remote_src: true
         owner: "{{ cluster_authelia_uid | int }}"
         group: "{{ cluster_authelia_uid | int }}"

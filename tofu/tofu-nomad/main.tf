@@ -92,7 +92,10 @@ resource "nomad_acl_policy" "deployer" {
         # written by tofu-nomad with the management token: authelia's config (session secret, storage key, password hashes) and traefik's
         # tokens. The deployer neither reads nor changes them (the more specific path wins over the glob above).
         path "nomad/jobs/authelia" { capabilities = ["deny"] }
+        path "nomad/jobs/authelia-internal" { capabilities = ["deny"] }
         path "nomad/jobs/traefik" { capabilities = ["deny"] }
+        path "nomad/jobs/step-ca" { capabilities = ["deny"] }
+        path "nomad/jobs/traefik/traefik/vpn" { capabilities = ["deny"] }
       }
     }
     host_volume "*" { policy = "write" }
@@ -148,6 +151,29 @@ resource "nomad_variable" "authelia" {
     configuration = var.authelia_configuration
     users         = var.authelia_users
   }
+}
+
+resource "nomad_variable" "authelia_internal" {
+  path = "nomad/jobs/authelia-internal"
+  items = {
+    configuration = var.authelia_internal_configuration
+    users         = var.authelia_internal_users
+  }
+}
+
+# the VPN server's wireguard config (private key, preshared keys): only the task "vpn" of traefik's group reads this path
+resource "nomad_variable" "vpn" {
+  path = "nomad/jobs/traefik/traefik/vpn"
+  items = {
+    wg_conf = var.vpn_wg_conf
+  }
+}
+
+# step-ca's ca.json, the encrypted intermediate key and its password, the provisioner keys: only the job step-ca reads this path
+resource "nomad_variable" "stepca" {
+  count = length(var.stepca_items) > 0 ? 1 : 0
+  path  = "nomad/jobs/step-ca"
+  items = var.stepca_items
 }
 
 resource "nomad_variable" "traefik" {

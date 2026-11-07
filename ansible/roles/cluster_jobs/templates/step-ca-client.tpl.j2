@@ -1,0 +1,9 @@
+{#- step-ca template of the device certificates: the common name only (the device name), no names, client authentication only. -#}
+{
+  "subject": {{ '{{ toJson .Subject }}' }},
+  "keyUsage": ["digitalSignature"],
+  "extKeyUsage": ["clientAuth"],
+  "basicConstraints": {
+    "isCA": false
+  }
+}

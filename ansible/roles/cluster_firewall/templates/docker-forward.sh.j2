@@ -1,0 +1,11 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Docker's iptables FORWARD chain has the policy drop, and nothing in it accepts new connections to the network "egress" (docker only knows its own
+# bridges). The published ports of the public services (traefik: {{ cluster_firewall_public_tcp_ports | join(', ') }}) are accepted in DOCKER-USER, the chain docker never
+# touches; who may connect is decided by the table inet {{ cluster_firewall_table }} (forward chain), which sees the packet first.
+set -e
+iptables -w -N DOCKER-USER 2>/dev/null || true
+{% for port in cluster_firewall_public_tcp_ports %}
+iptables -w -C DOCKER-USER -p tcp -m conntrack --ctstate DNAT --ctorigdstport {{ port }} -j ACCEPT 2>/dev/null \
+  || iptables -w -I DOCKER-USER -p tcp -m conntrack --ctstate DNAT --ctorigdstport {{ port }} -j ACCEPT
+{% endfor %}

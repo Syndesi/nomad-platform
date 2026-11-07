@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The local proxy for command line tools that cannot do a web login (nomad, consul): a Caddy on 127.0.0.1 that sends their requests to
-# traefik's ops names with the authelia session cookie you got by logging in (password + TOTP, asked with gum). On the HOST, in the cluster
+# traefik's internal names (zone <cluster_name>.internal, through the VPN: the VPN must be up, `wg-quick up wg-<cluster>`) with the authelia-internal session cookie you got by logging in (password + TOTP, asked with gum). On the HOST, in the cluster
 # repo, via `task proxy:up|login|down|status|env`. State (Caddyfile, session cookie) lives in .proxy/ (git-ignored).
 #   proxy.sh up      render the config, start caddy
 #   proxy.sh login   ask for user, password and the TOTP code, log in through the proxy, give caddy the session, check it
@@ -9,9 +9,9 @@
 #   proxy.sh env     the environment for the cli tools (eval "$(task proxy:env)")
 # The uplink to traefik is TLS 1.3 with the hybrid post-quantum key exchange X25519MLKEM768 and nothing else (tls_curves; traefik's pq-only
 # option pq-only accepts nothing else either): there is no downgrade in either direction.
-# Environment (all optional): PROXY_DOMAIN (default cluster_domain), PROXY_UPSTREAM (host:port to connect to instead of the ops names,
-# e.g. a tunnel; the names stay in SNI and Host), PROXY_CA_FILE (CA of traefik's certificates; default the cluster CA when the cluster uses
-# it), PROXY_NOMAD_PORT=4646, PROXY_CONSUL_PORT=8500, PROXY_AUTH_PORT=9091, PROXY_IMAGE.
+# Environment (all optional): PROXY_DOMAIN (default cluster_internal_zone), PROXY_UPSTREAM (host:port to connect to instead of the names; default
+# <VPN server address>:443, the names stay in SNI and Host), PROXY_CA_FILE (CA of traefik's certificates; default the cluster root, which signs the
+# internal certificates), PROXY_NOMAD_PORT=4646, PROXY_CONSUL_PORT=8500, PROXY_AUTH_PORT=9091, PROXY_IMAGE.
 # Non-interactive login (tests): PROXY_USER, PROXY_PASSWORD, PROXY_TOTP.
 set -euo pipefail
 # shellcheck source=lib.sh
@@ -27,17 +27,19 @@ die() { echo "proxy: $*" >&2; exit 1; }
 tools() { docker compose exec -T tools bash -c ". /work/base/scripts/lib.sh; $1"; }
 dc() { docker compose -f "$dir/compose.yml" -p "$(basename "$PWD")-proxy" "$@"; }
 
-domain() { echo "${PROXY_DOMAIN:-$(tools 'cvar cluster_domain')}"; }
+domain() { echo "${PROXY_DOMAIN:-$(tools 'cvar cluster_internal_zone')}"; }
+upstream() { echo "${PROXY_UPSTREAM:-$(tools 'cvar cluster_vpn_server_ip'):443}"; }
 
 render() {
-  local d up_n up_c up_a ca=""
-  d=$(domain); [ -n "$d" ] || die "cannot find cluster_domain (is the tools container up? task up)"
+  local d up up_n up_c up_a ca=""
+  d=$(domain); [ -n "$d" ] || die "cannot find cluster_internal_zone (is the tools container up? task up)"
+  up=$(upstream)
   mkdir -p "$dir/session"; chmod 700 "$dir" "$dir/session"
   [ -e "$dir/session/authelia_session" ] || { : > "$dir/session/authelia_session"; chmod 600 "$dir/session/authelia_session"; }
-  if [ -n "${PROXY_CA_FILE:-}" ]; then cp "$PROXY_CA_FILE" "$dir/ca.pem"; ca=1
-  elif [ "$(tools 'cvar cluster_acme_ca')" = internal ]; then cp pki/ca.pem "$dir/ca.pem"; ca=1; fi
-  [ -n "$ca" ] || : > "$dir/ca.pem"
-  up_n=${PROXY_UPSTREAM:-nomad.$d}; up_c=${PROXY_UPSTREAM:-consul.$d}; up_a=${PROXY_UPSTREAM:-auth.$d}
+  # the internal names always have certificates of the cluster's own CA
+  if [ -n "${PROXY_CA_FILE:-}" ]; then cp "$PROXY_CA_FILE" "$dir/ca.pem"; else cp pki/ca.pem "$dir/ca.pem"; fi
+  ca=1
+  up_n=$up; up_c=$up; up_a=$up
   trust=""; [ -n "$ca" ] && trust="tls_trusted_ca_certs /ca.pem"
   cat > "$dir/Caddyfile" <<CADDY
 {
@@ -137,6 +139,7 @@ login() {
 status() {
   local code
   dc ps --status running 2>/dev/null | grep -q caddy || die "caddy is not running (task proxy:up)"
+  tools 'CLUSTER_DIR=/work /work/base/scripts/vpn.sh check' 2>/dev/null || true
   # a request through the proxy that needs no nomad token: 200 = logged in, 302/401 = no (valid) session
   code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$nomad_port/v1/status/leader" || echo 000)
   case "$code" in

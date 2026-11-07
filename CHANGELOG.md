@@ -4,6 +4,30 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- **Internal services behind a VPN** (zone `<cluster_name>.internal`, `cluster_internal_zone`): `auth.`, `nomad.`, `consul.`, `traefik.` are no longer on the
+  public `websecure` entry point (their routers moved to Traefik's file provider on a new entry point `vpn`, bound to the WireGuard address inside the
+  allocation; `websecure.asDefault: true`). New in Traefik's allocation: a WireGuard server (`wg1`, MTU 1280, preshared key per peer, nft guard: only
+  tcp/443 and 53 reach it), wstunnel (disguise over tcp/443, TCP router with TLS passthrough, mTLS, `--restrict-to 127.0.0.1:51820`) and a dnsmasq for
+  the zone. Traefik always runs in its own namespace now (`cni/egress`, root, `ip_forward=0`). New: `task vpn:init|client|revoke|list`,
+  `scripts/vpn.sh`, `cluster_vpn_*`; client files (wg-quick, systemd and NetworkManager variants) in `secrets/vpn/<device>/`. `task proxy:*`
+  goes through the VPN. `cluster_wireguard_image`, `cluster_wstunnel_image`, `cluster_dnsmasq_image` are pinned by version tag.
+- **Second Authelia (`authelia-internal`)**, job `authelia` run twice (`cluster_jobs_authelia_instances`): own cookie domain, secrets
+  (`cluster_authelia_internal_*`, `task secrets:ensure` adds them to an existing file), sqlite and host volume (`/srv/authelia-internal`), TOTP seeds
+  (`authelia_internal_totp_seeds`, always separate), bans, port 9092, access rules `authelia_internal_access_rules`. Backup, restore, `authelia_totp` and
+  `authelia-users.sh` handle both. `authelia_access_rules` now only holds the rules of public apps (the ops rules moved).
+- **PKI: offline root plus two intermediates**, all name-constrained (the zone is permitted): `ansible` (the controller: agent, node, ingress certificates)
+  and `step-ca`. New `task pki:ca` (a new CA: full redeploy), `task pki:intermediate -- ansible|stepca`; leaf certificates carry the chain, peers trust
+  only the root. The root key is not read by any deploy.
+- **step-ca** (job `step-ca`, `cluster_stepca_*`, `task stepca:init`): reachable only through the Consul mesh (default-deny intentions, only
+  `traefik-acme`), Traefik's resolver `stepca` issues the certificates of the internal names (tls-alpn-01, 7 days), wstunnel's certificate is issued by the
+  deploy and renewed by a sidecar, device certificates (1 year) come from `task vpn:client` via `nomad alloc exec`. In the backup (`step-ca-db.tar.age`).
+- Consul's gRPC listener has its own certificate without IP addresses (`consul-grpc`): Envoy (BoringSSL) rejects chains with IP name constraints and an
+  IP in the leaf, which broke every Connect sidecar with the name-constrained CA.
+- Firewall fixes found with the VPN: the forward rule `ct status != dnat drop` matched every DNAT'ed connection (a flag set compared as a value), so no
+  new connection from outside reached a published port of a CNI network; it is now `ct status & dnat == 0`. Docker's own FORWARD chain (policy drop)
+  does not know the network `egress`: the public ports are accepted in `DOCKER-USER` (`docker-forward.sh`).
+- `task smoke` checks the new layout (ops names not published, internal jobs, VPN gate, step-ca certificates, client certificate expiry); `task secrets:ensure`.
+- Images: Authelia in the default image is 4.39.28 or newer where the internal cookie domain `<cluster_name>.internal` is needed.
 - Automatic updates (role `cluster_updates`): every 12 hours (`cluster_updates_interval_hours`), never a reboot. Ubuntu: `unattended-upgrades` with the security pockets only; Alpine: a cron job with `apk upgrade`. `cluster_updates_enabled: false` turns it off.
 - Nomad: the bootstrap token is handed over like consul's. tofu-nomad mints an ops token (`management`), the deploy deletes the bootstrap token from the cluster; tofu, `task backup`, `task smoke` and the TOTP registration use the ops token (`cluster_nomad_ops_token`, `nomad_ops_token` in `scripts/lib.sh`). Existing clusters are migrated by the next `task deploy:ansible`. New: role `nomad_acl` tasks `token` / `handover`.
 - Authelia is hardened like traefik: it runs as `cluster_authelia_uid` (8000, was root), all capabilities dropped, read-only root filesystem (small tmpfs on /tmp). Its folder and key belong to that user (changed in place on the next deploy). The health check verifies the certificate (no `tls_skip_verify`).

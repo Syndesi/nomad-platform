@@ -19,7 +19,7 @@
 - name: "job {{ cluster_jobs_item.name }}: run and wait for the deployment"
   ansible.builtin.command: >-
     nomad job run -var-file={{ cluster_jobs_remote_dir }}/{{ cluster_jobs_item.name }}.vars.json
-    {{ cluster_jobs_remote_dir }}/{{ cluster_jobs_item.name }}.nomad.hcl
+    {{ cluster_jobs_remote_dir }}/{{ cluster_jobs_item.file | default(cluster_jobs_item.name) }}.nomad.hcl
   environment: "{{ cluster_jobs_env }}"
   register: cluster_jobs_run
   changed_when: false
@@ -29,3 +29,8 @@
   environment: "{{ cluster_jobs_env }}"
   register: cluster_jobs_after
   changed_when: cluster_jobs_after.stdout != cluster_jobs_before.stdout
+
+# the certificate of wstunnel comes from step-ca: as soon as it runs, before traefik (whose sidecar renews it) starts
+- name: Certificates from step-ca
+  ansible.builtin.include_tasks: stepca-certs.yml
+  when: cluster_jobs_item.name == 'step-ca'

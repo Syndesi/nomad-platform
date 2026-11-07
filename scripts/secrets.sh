@@ -4,6 +4,7 @@
 # vars plugin), nothing secret is ever written to disk in clear text. Runs inside the tools
 # container via `task secrets:*`.
 #   secrets.sh init     create group_vars/all/secrets.sops.yml (refuses to overwrite)
+#   secrets.sh ensure   add secrets that a newer version needs to an existing file (never changes existing ones)
 #   secrets.sh show     print it decrypted
 #   secrets.sh get <v>  print one value (e.g. cluster_consul_management_token)
 #   secrets.sh edit     open it in $EDITOR through sops (interactive: use `task shell`)
@@ -42,9 +43,23 @@ cluster_tofu_state_passphrase: "$(string)"
 cluster_authelia_session_secret: "$(string)"
 cluster_authelia_storage_encryption_key: "$(string)"
 cluster_authelia_reset_password_jwt_secret: "$(string)"
+# The second Authelia (authelia-internal, the zone behind the VPN): its own, never shared with the first
+cluster_authelia_internal_session_secret: "$(string)"
+cluster_authelia_internal_storage_encryption_key: "$(string)"
+cluster_authelia_internal_reset_password_jwt_secret: "$(string)"
 YAML
     mv "$FILE.new" "$FILE"
     echo "written $FILE (encrypted)"
+    ;;
+  ensure)
+    # secrets that later versions need, added to an existing file (existing values are never touched)
+    [ -e "$FILE" ] || { echo "$FILE does not exist: task secrets:init" >&2; exit 1; }
+    for k in cluster_authelia_internal_session_secret cluster_authelia_internal_storage_encryption_key cluster_authelia_internal_reset_password_jwt_secret; do
+      if ! sops --decrypt --extract "[\"$k\"]" "$FILE" >/dev/null 2>&1; then
+        sops set "$FILE" "[\"$k\"]" "\"$(string)\""
+        echo "added $k"
+      fi
+    done
     ;;
   show)   sops --decrypt "$FILE" ;;
   get)    sops --decrypt --extract "[\"${2:?variable name}\"]" "$FILE" ;;
@@ -52,5 +67,5 @@ YAML
   uuid)   uuid ;;
   key)    key ;;
   string) string ;;
-  *) echo "usage: $0 init|show|get <var>|edit|uuid|key|string" >&2; exit 2 ;;
+  *) echo "usage: $0 init|ensure|show|get <var>|edit|uuid|key|string" >&2; exit 2 ;;
 esac

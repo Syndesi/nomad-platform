@@ -6,8 +6,8 @@ nomad_is_server: "{{ inventory_hostname in groups['cluster_servers'] | default([
 nomad_is_client: "{{ inventory_hostname in groups['cluster_clients'] | default([]) }}"
 nomad_ip: "{{ cluster_ip }}"
 nomad_interface: "{{ cluster_interface_effective }}"
-# docker capabilities jobs may add, beyond nomad's defaults: the wireguard sidecar of traefik needs net_admin (ingress nodes only)
-nomad_docker_extra_caps: "{{ ['net_admin'] if (cluster_traefik_wireguard and inventory_hostname in groups['cluster_ingress'] | default([])) else [] }}"
+# docker capabilities jobs may add, beyond nomad's defaults: the vpn sidecars of traefik (wireguard, dnsmasq, nftables) need net_admin (ingress nodes only)
+nomad_docker_extra_caps: "{{ ['net_admin'] if inventory_hostname in groups['cluster_ingress'] | default([]) else [] }}"
 # /v1/metrics answers WITHOUT a token (nomad does not ACL-protect it) and every container reaches the api port. Allocation and node metrics name
 # jobs, tasks and their resource use: off by default, only the agent's own runtime metrics remain. A scraper that needs them: true.
 nomad_publish_workload_metrics: false
@@ -25,10 +25,14 @@ nomad_cni_path: "{{ {'Alpine': '/usr/libexec/cni', 'Debian': '/usr/lib/cni'}[ans
 # Authelia runs on the nodes in cluster_authelia_hosts (client meta authelia = true, the host volume of 55-authelia.hcl)
 nomad_authelia_enabled: "{{ nomad_is_client and inventory_hostname in cluster_authelia_hosts }}"
 
+# step-ca runs on the node in cluster_stepca_hosts (client meta stepca = true, the host volume with its database)
+nomad_stepca_enabled: "{{ cluster_stepca_enabled | bool and nomad_is_client and inventory_hostname in cluster_stepca_hosts }}"
+
 # Client meta + host volumes. Nodes in group cluster_ingress may run traefik.
 nomad_client_meta: >-
   {{ ({'traefik': 'true'} if inventory_hostname in groups['cluster_ingress'] | default([]) else {})
-     | combine({'authelia': 'true'} if nomad_authelia_enabled | bool else {}) }}
+     | combine({'authelia': 'true'} if nomad_authelia_enabled | bool else {})
+     | combine({'stepca': 'true'} if nomad_stepca_enabled | bool else {}) }}
 nomad_host_volumes_dir: "{{ nomad_data_dir }}/volumes"
 # All host volumes of this node as {name, path, read_only}: the platform's (traefik's data on ingress nodes) plus the
 # cluster's own (cluster_host_volumes, per node or group in the cluster repo's inventory).
@@ -37,4 +41,8 @@ nomad_host_volumes: >-
       if inventory_hostname in groups['cluster_ingress'] | default([]) else [])
      + ([{'name': 'ingress-tls', 'path': cluster_ingress_tls_dir, 'read_only': true}]
         if (cluster_acme_ca == 'internal' and inventory_hostname in groups['cluster_ingress'] | default([])) else [])
+     + ([{'name': 'vpn-tls', 'path': cluster_vpn_tls_dir, 'read_only': false},
+         {'name': 'internal-tls', 'path': cluster_internal_tls_dir, 'read_only': true}]
+        if inventory_hostname in groups['cluster_ingress'] | default([]) else [])
+     + ([{'name': 'step-ca', 'path': cluster_stepca_dir, 'read_only': false}] if nomad_stepca_enabled | bool else [])
      + (cluster_host_volumes | default([])) }}

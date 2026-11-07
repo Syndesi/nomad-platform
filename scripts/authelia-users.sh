@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Password hashes and TOTP seeds of the authelia users, stored sops/age encrypted in inventory/group_vars/all/authelia.sops.yml as
-# authelia_password_hashes: {<user>: <argon2id hash>} and authelia_totp_seeds: {<user>: <base32 secret>} (generated here, once per user;
+# authelia_password_hashes: {<user>: <argon2id hash>}, authelia_totp_seeds and authelia_internal_totp_seeds: {<user>: <base32 secret>} (one seed per
+# authelia instance, the public one and the internal one behind the VPN, never shared; generated here, once per user;
 # the deploy registers it with authelia, so the second factor of a user survives a lost database). The users themselves (name, mail, groups) are plain data in
 # the cluster's authelia.yml. Runs inside the tools container; `task authelia:user` is the interactive front end
 # (it asks for the password on the host and pipes only the hash in here).
@@ -20,21 +21,22 @@ valid_name() { [[ $1 =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "user names: lowerca
 ensure_file() {
   [ -e "$FILE" ] && return
   [ -e .sops.yaml ] || { echo "no .sops.yaml: run 'task age:init' first" >&2; exit 1; }
-  printf -- '---\nauthelia_password_hashes: {}\nauthelia_totp_seeds: {}\n' \
+  printf -- '---\nauthelia_password_hashes: {}\nauthelia_totp_seeds: {}\nauthelia_internal_totp_seeds: {}\n' \
     | sops --config .sops.yaml --encrypt --input-type yaml --output-type yaml --filename-override "$PWD/$FILE" /dev/stdin > "$FILE.new"
   mv "$FILE.new" "$FILE"
 }
 
 # a seed is 160 random bits as base32 without padding (32 characters), the format of `authelia storage user totp generate --secret`
 make_seed() {
-  local user=$1
+  local user=$1 map seed
   ensure_file
-  if [[ $(sops decrypt --extract "[\"authelia_totp_seeds\"][\"$user\"]" "$FILE" 2>/dev/null) =~ ^[A-Z2-7]{32}$ ]]; then return; fi
-  local seed
-  seed=$(python3 -c 'import base64, os; print(base64.b32encode(os.urandom(20)).decode().rstrip("="))')
-  [[ $seed =~ ^[A-Z2-7]{32}$ ]] || { echo "could not generate a TOTP seed" >&2; exit 1; }
-  sops set "$FILE" "[\"authelia_totp_seeds\"][\"$user\"]" "\"$seed\""
-  echo "TOTP seed of '$user' generated in $FILE"
+  for map in authelia_totp_seeds authelia_internal_totp_seeds; do
+    if [[ $(sops decrypt --extract "[\"$map\"][\"$user\"]" "$FILE" 2>/dev/null) =~ ^[A-Z2-7]{32}$ ]]; then continue; fi
+    seed=$(python3 -c 'import base64, os; print(base64.b32encode(os.urandom(20)).decode().rstrip("="))')
+    [[ $seed =~ ^[A-Z2-7]{32}$ ]] || { echo "could not generate a TOTP seed" >&2; exit 1; }
+    sops set "$FILE" "[\"$map\"][\"$user\"]" "\"$seed\""
+    echo "TOTP seed of '$user' ($map) generated in $FILE"
+  done
 }
 
 case "${1:-}" in
@@ -55,6 +57,7 @@ case "${1:-}" in
     [ -e "$FILE" ] || exit 0
     sops unset "$FILE" "[\"authelia_password_hashes\"][\"$user\"]"
     sops unset "$FILE" "[\"authelia_totp_seeds\"][\"$user\"]" 2>/dev/null || true
+    sops unset "$FILE" "[\"authelia_internal_totp_seeds\"][\"$user\"]" 2>/dev/null || true
     ;;
   list)
     [ -e "$FILE" ] && sops decrypt --extract '["authelia_password_hashes"]' "$FILE" | sed -nE 's/^([^ :]+):.*/\1/p'

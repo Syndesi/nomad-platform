@@ -12,4 +12,13 @@ client {
     path = "{{ cluster_authelia_tls_dir }}"
     read_only = true
   }
+  # the second authelia (the internal services behind the VPN): its own folder and certificate
+  host_volume "authelia-internal" {
+    path = "{{ cluster_authelia_internal_dir }}"
+    read_only = false
+  }
+  host_volume "authelia-internal-tls" {
+    path = "{{ cluster_authelia_internal_tls_dir }}"
+    read_only = true
+  }
 }

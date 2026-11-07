@@ -8,7 +8,7 @@ depend() {
 
 start() {
     ebegin "Loading the cluster firewall"
-    /usr/sbin/nft -f {{ cluster_firewall_file }}
+    /usr/sbin/nft -f {{ cluster_firewall_file }} && /bin/sh {{ cluster_firewall_file | dirname }}/docker-forward.sh
     eend $?
 }
 

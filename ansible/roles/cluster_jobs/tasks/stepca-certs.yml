@@ -1,0 +1,58 @@
+---
+# Right after the step-ca job: wstunnel's certificate from step-ca (the provisioner "services"), issued inside step-ca's allocation
+# (`nomad alloc exec`: no network path to step-ca needed) and put on the ingress node. From then on the task vpn-renew of traefik's group renews it.
+# Whenever the certificate is missing, not from step-ca (the first one comes from the ansible intermediate), or about to expire (a stopped
+# sidecar, a long outage), this issues a new one: `task maintenance` repairs it the same way.
+- name: step-ca's allocation
+  ansible.builtin.shell: >-
+    nomad job allocs -json step-ca | jq -r '[.[] | select(.ClientStatus == "running")] | sort_by(.CreateTime) | last | .ID // empty'
+  environment: "{{ cluster_jobs_env }}"
+  register: cluster_stepca_alloc
+  until: cluster_stepca_alloc.stdout | length > 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Is wstunnel's certificate from step-ca, with time left?
+  ansible.builtin.shell: |
+    d={{ cluster_vpn_tls_dir }}
+    [ -s "$d/vpn.key" ] && [ -s "$d/vpn.pem" ] || { echo missing; exit 0; }
+    [ "$(awk '/BEGIN CERTIFICATE/{c=""} {c=c $0 "\n"} END{printf "%s", c}' "$d/vpn.pem" | sha256sum | cut -d' ' -f1)" = {{ (((lookup('ansible.builtin.file', cluster_stepca_intermediate_cert) | trim) ~ '\n') | hash('sha256')) | quote }} ] || { echo not-stepca; exit 0; }
+    openssl x509 -in "$d/vpn.pem" -noout -checkend 86400 >/dev/null || { echo expiring; exit 0; }
+    echo ok
+  delegate_to: "{{ groups['cluster_ingress'][0] }}"
+  register: cluster_stepca_vpn_state
+  changed_when: false
+
+- name: Issue wstunnel's certificate in step-ca's allocation
+  when: cluster_stepca_vpn_state.stdout != 'ok'
+  block:
+    - name: step ca certificate (provisioner services)
+      ansible.builtin.shell: |
+        nomad alloc exec -i=false -t=false -task step-ca {{ cluster_stepca_alloc.stdout }} sh -c '
+          set -e; export STEPPATH=/tmp/step; umask 077
+          step ca certificate --force --provisioner services --provisioner-password-file /secrets/password \
+            --ca-url https://127.0.0.1:9000 --root /secrets/root.pem --kty EC --crv P-256 \
+            --not-after {{ cluster_stepca_cert_hours }}h {{ cluster_vpn_host }} /tmp/vpn.pem /tmp/vpn.key >/dev/null
+          cat /tmp/vpn.pem; echo "=====KEY====="; cat /tmp/vpn.key; rm -rf /tmp/vpn.pem /tmp/vpn.key /tmp/step'
+      environment: "{{ cluster_jobs_env }}"
+      register: cluster_stepca_vpn_issued
+      no_log: true
+      changed_when: true
+      failed_when: cluster_stepca_vpn_issued.rc != 0 or '=====KEY=====' not in cluster_stepca_vpn_issued.stdout
+
+
+    - name: wstunnel's certificate and key on the ingress node
+      ansible.builtin.copy:
+        content: "{{ item.content | trim }}\n"
+        dest: "{{ cluster_vpn_tls_dir }}/{{ item.file }}"
+        owner: "{{ item.owner }}"
+        group: "{{ item.owner }}"
+        mode: "{{ item.mode }}"
+      delegate_to: "{{ groups['cluster_ingress'][0] }}"
+      loop:
+        - { file: vpn.pem, content: "{{ cluster_stepca_vpn_issued.stdout.split('=====KEY=====')[0] }}", owner: "{{ cluster_vpn_uid }}", mode: "0644" }
+        - { file: vpn.key, content: "{{ cluster_stepca_vpn_issued.stdout.split('=====KEY=====')[1] }}", owner: "{{ cluster_vpn_uid }}", mode: "0600" }
+      loop_control:
+        label: "{{ item.file }}"
+      no_log: true

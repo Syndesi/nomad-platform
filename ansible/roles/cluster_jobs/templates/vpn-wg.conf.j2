@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+# The VPN server in traefik's allocation (interface wg1). Peers: `task vpn:client -- <device>`, `task vpn:revoke -- <device>`.
+[Interface]
+PrivateKey = {{ cluster_vpn_server_private_key }}
+Address = {{ cluster_vpn_server_ip }}/{{ cluster_vpn_subnet.split('/')[1] }}
+ListenPort = {{ cluster_vpn_wg_port }}
+MTU = {{ cluster_vpn_mtu }}
+# the namespace's firewall (jobs/traefik/vpn.nft.tpl): only tcp 443 (-> traefik) and dns reach this address from the VPN, nothing is forwarded
+PostUp = nft -f /vpn.nft
+PostDown = nft delete table inet vpnguard
+{% for peer in cluster_vpn_peers | default([]) %}
+
+# {{ peer.name }}
+[Peer]
+PublicKey = {{ peer.public_key }}
+PresharedKey = {{ peer.psk }}
+AllowedIPs = {{ peer.ip }}/32
+{% endfor %}
