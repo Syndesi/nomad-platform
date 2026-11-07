@@ -10,9 +10,18 @@ http:
     # written by whoever submits a job (a second router for auth. or a second "authelia" middleware would take over the logins).
     authelia:
       entryPoints: [websecure]
-      middlewares: [admin-headers]
+      middlewares: [auth-ratelimit, admin-headers]
       service: authelia
       rule: Host(`auth.{{ env "TPL_DOMAIN" }}`)
+      tls: { options: pq-only{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
+    # the login itself: authelia counts failures per USERNAME only, so one address trying one password on many users is not stopped there.
+    # Here it is limited per source address, across all names.
+    authelia-login:
+      entryPoints: [websecure]
+      middlewares: [login-ratelimit, admin-headers]
+      service: authelia
+      rule: Host(`auth.{{ env "TPL_DOMAIN" }}`) && (PathPrefix(`/api/firstfactor`) || PathPrefix(`/api/secondfactor`))
+      priority: 200
       tls: { options: pq-only{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
     nomad:
       entryPoints: [websecure]
@@ -53,6 +62,19 @@ http:
         # instead of a redirect). By default traefik copies ALL request headers, i.e. also X-Nomad-Token / X-Consul-Token of command line tools.
         authRequestHeaders: [Cookie, Accept, X-Requested-With, X-Forwarded-For, X-Forwarded-Proto, X-Forwarded-Host, X-Forwarded-Uri, X-Forwarded-Method]
         authResponseHeaders: [Remote-User, Remote-Groups, Remote-Name, Remote-Email]
+    # per source address (the client address traefik sees: behind a proxy or load balancer that is the proxy, see ipStrategy)
+    # the whole portal: generous, a page load is a dozen requests
+    auth-ratelimit:
+      rateLimit:
+        average: 120
+        period: 1m
+        burst: 60
+    # first and second factor: 10 attempts a minute, a burst of 5 (a person typing a wrong password a few times is not affected)
+    login-ratelimit:
+      rateLimit:
+        average: 10
+        period: 1m
+        burst: 5
     # the ops names: HSTS and the usual browser headers (the apps set their own)
     admin-headers:
       headers:

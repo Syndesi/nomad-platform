@@ -10,6 +10,12 @@
 # allocation's network namespace: no host service can drop it, and a restart of the allocation rebuilds it. Traefik then
 # reaches consul and nomad on the node's cluster address instead of 127.0.0.1.
 
+variable "user" {
+  type        = string
+  default     = ""
+  description = "user (id) of the traefik container; empty = the image's (root). Set by the deploy (cluster_traefik_uid)"
+}
+
 variable "datacenter" {
   type = string
 }
@@ -255,6 +261,8 @@ EOT
     task "traefik" {
       driver = "docker"
 
+      user = var.user # "" = the image's own user
+
       volume_mount {
         volume      = "traefik"
         destination = "/acme"
@@ -284,6 +292,9 @@ EOT
         data        = file("${var.templates_dir}/static.yml.tpl")
         destination = "secrets/traefik.yml"
         perms       = "0600"
+        # nomad writes templates as root: the task user has to own what it reads (0600)
+        uid         = var.user == "" ? 0 : parseint(var.user, 10)
+        gid         = var.user == "" ? 0 : parseint(var.user, 10)
       }
 
       # authelia, nomad / consul / dashboard behind the authelia forward-auth (the middleware is defined here), TLS options,
@@ -292,6 +303,9 @@ EOT
         data        = file("${var.templates_dir}/dynamic.yml.tpl")
         destination = "secrets/dynamic/cluster.yml"
         perms       = "0600"
+        # nomad writes templates as root: the task user has to own what it reads (0600)
+        uid         = var.user == "" ? 0 : parseint(var.user, 10)
+        gid         = var.user == "" ? 0 : parseint(var.user, 10)
       }
 
       # parameters of the templates above (jobs/traefik/*.tpl), read there with {{ env "..." }}
@@ -312,6 +326,11 @@ EOT
         image        = var.image
         network_mode = var.wireguard ? null : "host"
         args         = ["--configFile=/secrets/traefik.yml"]
+        # the internet edge: no capability but the one for ports 80 / 443 (not even needed as a non-root user, see cluster_traefik_uid),
+        # a read-only root filesystem (config, data and certificates are mounts)
+        cap_drop        = ["ALL"]
+        cap_add         = ["NET_BIND_SERVICE"]
+        readonly_rootfs = true
       }
 
       resources {

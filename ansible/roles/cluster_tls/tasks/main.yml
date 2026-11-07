@@ -100,6 +100,15 @@
         cluster_tls_sans: "{{ cluster_tls_ingress_sans }}"
         cluster_tls_eku: serverAuth
 
+# the ingress key is read by traefik's container user (cluster_traefik_uid; issue.yml writes it as root, so this runs after every issue)
+- name: Ingress key belongs to the user traefik runs as
+  ansible.builtin.file:
+    path: "{{ cluster_ingress_tls_dir }}/ingress.key"
+    owner: "{{ cluster_traefik_uid }}"
+    group: "{{ cluster_traefik_uid }}"
+    mode: "0600"
+  when: cluster_tls_ingress
+
 # the ingress key used to live in the tls directory (and was copied into a nomad variable); it only exists in its own directory now
 - name: The old ingress key and certificate in the tls directory are gone
   ansible.builtin.file:

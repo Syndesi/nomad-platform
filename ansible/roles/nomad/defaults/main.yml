@@ -11,6 +11,9 @@ nomad_docker_extra_caps: "{{ ['net_admin'] if (cluster_traefik_wireguard and inv
 # /v1/metrics answers WITHOUT a token (nomad does not ACL-protect it) and every container reaches the api port. Allocation and node metrics name
 # jobs, tasks and their resource use: off by default, only the agent's own runtime metrics remain. A scraper that needs them: true.
 nomad_publish_workload_metrics: false
+# Task drivers that do not fingerprint on the clients, so no job can use them. Remove a name only if you run jobs with that driver (and
+# then accept that its tasks are outside the container firewall).
+nomad_driver_denylist: [mock_driver, exec, java, qemu]
 nomad_docker_default_caps: [audit_write, chown, dac_override, fowner, fsetid, kill, mknod, net_bind_service, setfcap, setgid, setpcap, setuid, sys_chroot]
 
 # nomad agents register themselves in consul with this token (minted by tofu-consul)

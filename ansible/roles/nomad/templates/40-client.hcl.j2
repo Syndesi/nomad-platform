@@ -9,8 +9,9 @@ client {
   # {{ cluster_egress_bridge_subnet }}, mode = "cni/{{ cluster_egress_cni_name }}", /opt/cni/config) is read at start: this comment makes a change restart the agent.
   bridge_network_subnet = "{{ cluster_nomad_bridge_subnet }}"
   options {
-    # the driver Nomad's own tests use (fake tasks); it is built into source builds and has no use on a cluster
-    "driver.denylist" = "mock_driver"
+    # drivers this cluster does not use (nomad_driver_denylist): exec, java and qemu run on the host's network and bypass the container
+    # firewall; mock_driver is for nomad's own tests. raw_exec is off by default (plugin not enabled).
+    "driver.denylist" = {{ nomad_driver_denylist | join(',') | to_json }}
   }
   servers = {{ (cluster_servers_addrs | map('regex_replace', '$', ':4647') | list) | to_json }}
 {% if nomad_client_meta %}

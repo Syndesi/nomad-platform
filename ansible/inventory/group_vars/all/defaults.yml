@@ -208,6 +208,11 @@ cluster_consul_task_kv_prefixes: []
 #   cluster_wireguard_image  a wireguard client image whose entrypoint brings up /config/wg_confs/*.conf (e.g. the linuxserver one)
 #   `task wireguard:conf -- <wg0.conf>`  stores the wg-quick config sops-encrypted (inventory/group_vars/all/wireguard.sops.yml)
 cluster_traefik_wireguard: false
+# The user id traefik runs as in its container (0 = root). Not root by default: all capabilities are dropped, the ingress node lowers
+# net.ipv4.ip_unprivileged_port_start to 80 so ports 80 / 443 need none, and the files traefik writes / reads (its data volume, the ingress key)
+# belong to this id. With wireguard traefik shares the allocation's own network namespace, where that sysctl is not ours to set: root, with only
+# net_bind_service.
+cluster_traefik_uid: "{{ 0 if cluster_traefik_wireguard | bool else 65532 }}"
 cluster_wireguard_image: ""
 # traefik's prometheus metrics: own entry point and port, consul service "traefik-metrics", for the cluster only (the firewall limits it
 # to cluster_subnets), not routed by traefik. A scraper job finds them through consul.

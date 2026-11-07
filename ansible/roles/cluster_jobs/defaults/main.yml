@@ -28,6 +28,7 @@ cluster_jobs_list:
     vars:
       templates_dir: "{{ cluster_jobs_remote_dir }}/traefik"
       image: "{{ cluster_traefik_image }}"
+      user: "{{ cluster_traefik_uid | string if cluster_traefik_uid | int != 0 else '' }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'traefik') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
       consul_port: "{{ cluster_consul_https_port }}"
       nomad_port: "{{ cluster_nomad_http_port }}"

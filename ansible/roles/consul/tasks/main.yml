@@ -13,6 +13,26 @@
     # not root: the agent needs no privileged port and no capability (user and group are made by role cluster_tls, which issues its key)
     hashi_agent_user: "{{ cluster_consul_user }}"
     hashi_agent_group: "{{ cluster_consul_user }}"
+    # systemd only (OpenRC has no equivalent). The agent writes its data directory and nothing else, listens on ports above 1024.
+    hashi_agent_systemd_service_extra:
+      - NoNewPrivileges=true
+      - CapabilityBoundingSet=
+      - AmbientCapabilities=
+      - ProtectSystem=strict
+      - ReadWritePaths={{ consul_data_dir }}
+      - ProtectHome=true
+      - PrivateTmp=true
+      - PrivateDevices=true
+      - ProtectKernelTunables=true
+      - ProtectKernelModules=true
+      - ProtectKernelLogs=true
+      - ProtectControlGroups=true
+      - ProtectClock=true
+      - RestrictSUIDSGID=true
+      - RestrictRealtime=true
+      - RestrictNamespaces=true
+      - LockPersonality=true
+      - SystemCallArchitectures=native
 
 - name: Consul config and start
   ansible.builtin.include_tasks: config.yml

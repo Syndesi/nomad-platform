@@ -17,6 +17,14 @@
       - LimitNOFILE=infinity
       - LimitNPROC=infinity
       - TasksMax=infinity
+      # a subset: nomad stays root and drives docker, cni, cgroups and mounts, so no filesystem or capability restrictions (systemd only)
+      - NoNewPrivileges=true
+      - ProtectKernelModules=true
+      - ProtectKernelLogs=true
+      - ProtectClock=true
+      - RestrictRealtime=true
+      - LockPersonality=true
+      - SystemCallArchitectures=native
 
 - name: Data and host volume directories
   ansible.builtin.file:
@@ -24,6 +32,39 @@
     state: directory
     mode: "0755"
   loop: "{{ [nomad_data_dir] + (nomad_host_volumes | map(attribute='path') | list) }}"
+
+# traefik's data (acme.json: a private key) belongs to the user traefik runs as (cluster_traefik_uid); recursive, so an acme.json made by an
+# earlier root-run traefik is handed over too
+- name: Traefik data directory
+  ansible.builtin.file:
+    path: "{{ nomad_host_volumes_dir }}/traefik"
+    state: directory
+    owner: "{{ cluster_traefik_uid }}"
+    group: "{{ cluster_traefik_uid }}"
+    mode: "0755"
+  when: inventory_hostname in groups['cluster_ingress'] | default([])
+
+# ownership only (acme.json keeps its own mode, traefik insists on 0600)
+- name: Traefik data files belong to that user too
+  ansible.builtin.shell: |
+    find {{ (nomad_host_volumes_dir ~ '/traefik') | quote }} -not -user {{ cluster_traefik_uid | int }} -exec chown {{ cluster_traefik_uid | int }}:{{ cluster_traefik_uid | int }} {} + -print
+  register: nomad_traefik_chown
+  changed_when: nomad_traefik_chown.stdout | length > 0
+  when: inventory_hostname in groups['cluster_ingress'] | default([])
+
+# a traefik that is not root binds 80 / 443 without a capability when the kernel allows unprivileged binds from port 80 on (host network;
+# harmless on a node of this cluster: every host service that listens runs as root or as an account of the platform)
+- name: Unprivileged processes may bind ports from 80 (traefik's non-root user)
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_unprivileged_port_start
+    value: "80"
+    sysctl_file: /etc/sysctl.d/90-cluster-ingress.conf
+    sysctl_set: true
+    reload: false
+    state: present
+  when:
+    - inventory_hostname in groups['cluster_ingress'] | default([])
+    - cluster_traefik_uid | int != 0
 
 # Authelia's state: a folder of its own (root only; the container runs as root), before the agent that offers it as a volume
 - name: Authelia state directory
