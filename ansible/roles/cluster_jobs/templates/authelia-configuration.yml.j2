@@ -26,7 +26,7 @@ server:
 # WebAuthn is off unless authelia_webauthn is true (registering a key needs the one-time code of the notifier, see README).
 totp:
   disable: false
-  issuer: '{{ authelia_totp_issuer }}'
+  issuer: {{ authelia_totp_issuer | to_json }}
   algorithm: SHA1
   digits: 6
   period: 30
@@ -37,7 +37,7 @@ totp:
   disable_reuse_security_policy: false
 webauthn:
   disable: {{ (not authelia_webauthn | bool) | lower }}
-  display_name: '{{ authelia_totp_issuer }}'
+  display_name: {{ authelia_totp_issuer | to_json }}
 default_2fa_method: totp
 # Failed logins are counted per USERNAME: whoever knows a name can lock that account for ban_time (an unknown name locks nothing).
 # So: keep the names unlisted, the bans short, the retries moderate.
@@ -50,18 +50,18 @@ access_control:
   rules:
     # traefik asks authelia about EVERY request of the websecure entry point (default middleware), the login portal's own names included
     - domain:
-        - 'auth.{{ cluster_domain }}'
+        - {{ ('auth.' ~ cluster_domain) | to_json }}
       policy: bypass
 {% for rule in authelia_access_rules %}
     - domain:
 {% for d in (rule.domain if rule.domain is not string else [rule.domain]) %}
-        - '{{ d }}'
+        - {{ d | to_json }}
 {% endfor %}
-      policy: '{{ rule.policy }}'
+      policy: {{ rule.policy | to_json }}
 {% if rule.subject | default([]) %}
       subject:
 {% for s in rule.subject %}
-        - ['{{ s }}']
+        - [{{ s | to_json }}]
 {% endfor %}
 {% endif %}
 {% endfor %}
@@ -75,19 +75,19 @@ authentication_backend:
     path: /config/users.yml
 identity_validation:
   reset_password:
-    jwt_secret: '{{ cluster_authelia_reset_password_jwt_secret }}'
+    jwt_secret: {{ cluster_authelia_reset_password_jwt_secret | to_json }}
 session:
   # sessions are in memory (no redis): they end with the authelia process, a redeploy logs everybody out. The second factors do not (storage below).
-  secret: '{{ cluster_authelia_session_secret }}'
+  secret: {{ cluster_authelia_session_secret | to_json }}
   inactivity: {{ authelia_session_inactivity }}
   expiration: {{ authelia_session_expiration }}
   remember_me: {{ authelia_session_remember_me }}
   cookies:
-    - domain: '{{ cluster_domain }}'
-      authelia_url: 'https://auth.{{ cluster_domain }}'
+    - domain: {{ cluster_domain | to_json }}
+      authelia_url: {{ ('https://auth.' ~ cluster_domain) | to_json }}
       same_site: lax
 storage:
-  encryption_key: '{{ cluster_authelia_storage_encryption_key }}'
+  encryption_key: {{ cluster_authelia_storage_encryption_key | to_json }}
   local:
     # the host volume "authelia" (/srv/authelia on the node, see jobs/authelia.nomad.hcl): totp secrets, devices, bans
     path: /data/db.sqlite3

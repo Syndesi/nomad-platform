@@ -167,12 +167,12 @@ cluster_egress_bridge_ip: 172.26.80.1
 # --- authelia ---------------------------------------------------------------------------------------
 # Authelia keeps its sqlite database (second factors, devices, bans) in a plain folder on the node it runs on, offered to nomad as the host
 # volume "authelia" (fragment 55-authelia.hcl) and used by the job through a constraint on the client meta authelia = true. It runs on the
-# node in cluster_authelia_hosts: the first ingress node by default, so Authelia runs next to traefik (its forward-auth is one hop on the
+# node in cluster_authelia_hosts: the ingress node by default, so Authelia runs next to traefik (its forward-auth is one hop on the
 # same host) and keeps one database. It must be a client. The folder is part of `task backup`.
-cluster_authelia_hosts: "{{ (groups['cluster_ingress'] | default([]))[:1] }}"
+cluster_authelia_hosts: "{{ groups['cluster_ingress'] | default([]) }}"
 cluster_authelia_dir: /srv/authelia
 # Certificates that a JOB mounts from the node as a read-only host volume (the key never leaves the node): authelia's own server
-# certificate (forward-auth is https) on the nodes in cluster_authelia_hosts, the ingress wildcard on the ingress nodes (internal CA mode).
+# certificate (forward-auth is https) on the nodes in cluster_authelia_hosts, the ingress wildcard on the ingress node (internal CA mode).
 # One directory each, so a job sees only its own key.
 cluster_authelia_tls_dir: /etc/cluster/tls-authelia
 cluster_ingress_tls_dir: /etc/cluster/tls-ingress

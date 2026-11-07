@@ -56,7 +56,7 @@ domain in `authelia_access_rules` (first match wins: put it after the rules of t
 -- <name>` asks for a password (twice, or from stdin) and stores its argon2id hash and a generated TOTP seed sops-encrypted. The deploy
 registers the seeds in Authelia and writes the otpauth URI to `secrets/authelia/totp-<name>.txt` (git-ignored): put it into an
 authenticator app. The seed is the truth, so a lost database is repaired by the next deploy. The sqlite database lives in the host volume
-`authelia` (`/srv/authelia` on the nodes in `cluster_authelia_hosts`, the first ingress node by default) and is part of `task backup`. The job has
+`authelia` (`/srv/authelia` on the nodes in `cluster_authelia_hosts`, the ingress node by default) and is part of `task backup`. The job has
 `auto_revert = false` on purpose (a failed upgrade may already have migrated the database). Sessions: 18 hours without a request, 24 hours
 at most after the login (`authelia_session_*`).
 

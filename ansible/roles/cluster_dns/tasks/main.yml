@@ -166,7 +166,9 @@
     - name: Exactly one dhcpcd manager runs, with the current config
       ansible.builtin.shell: |
         keep=$(cat /run/dhcpcd/pid 2>/dev/null || true)
-        mgrs=$(pgrep -f 'dhcpcd: \[manager\]' || true)
+        # (no process title in this comment: pgrep -f would match this very shell) a manager started for one interface at boot by the
+        # network stack is titled with the interface name, not "manager"; its proxies are not matched
+        mgrs=$(pgrep -f 'dhcpcd: (\[manager\]|[A-Za-z0-9._-]+ \[ip[46]\])' || true)
         n=0
         if [ -n "$keep" ] && printf '%s\n' "$mgrs" | grep -qx "$keep"; then
           for p in $mgrs; do

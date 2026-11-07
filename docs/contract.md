@@ -33,7 +33,7 @@ Inside the tools container the cluster repo is `/work`, the platform `/work/base
 | `alpine` / `ubuntu` | OS family of the node (selects the binary build, package manager, init system) |
 | `cluster_servers` | consul + nomad server (and, if also in `cluster_clients`, client) |
 | `cluster_clients` | nomad client: docker, cni, dns forwarder |
-| `cluster_ingress` | may run traefik (nomad client meta `traefik=true`) |
+| `cluster_ingress` | exactly one node: runs traefik (nomad client meta `traefik=true`), public 80/443; Authelia runs there by default |
 
 The platform does not create machines. How they come to be (incus VMs by tofu, bare metal, a VPS) is the cluster repo's
 business. It must only make them reachable over ssh and run `scripts/node-bootstrap.sh` on them once (by hand, or from

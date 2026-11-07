@@ -21,10 +21,10 @@ table inet {{ cluster_firewall_table }} {
     # ssh from anywhere, except from the container bridges (a compromised workload gets no path to sshd)
     iifname { "docker0", "nomad", "br-*" } tcp dport 22 drop
 {% if cluster_firewall_ssh_rate | trim %}
-    # new connections only (an open session is "established" and accepted above); the cluster's own sources are exempt
+    # per source address (IPv6: per /64, a subscriber has a whole prefix); new connections only (an open session is "established" and accepted above); the cluster's own sources are exempt
     ip saddr { {{ cluster_firewall_cluster_sources | join(', ') }} } tcp dport 22 accept
     tcp dport 22 ct state new meter ssh_new { ip saddr timeout 5m limit rate over {{ cluster_firewall_ssh_rate }} burst {{ cluster_firewall_ssh_burst }} packets } drop
-    tcp dport 22 ct state new meter ssh_new6 { ip6 saddr timeout 5m limit rate over {{ cluster_firewall_ssh_rate }} burst {{ cluster_firewall_ssh_burst }} packets } drop
+    tcp dport 22 ct state new meter ssh_new6 { ip6 saddr and ffff:ffff:ffff:ffff:: timeout 5m limit rate over {{ cluster_firewall_ssh_rate }} burst {{ cluster_firewall_ssh_burst }} packets } drop
 {% endif %}
     tcp dport 22 accept
 
@@ -54,7 +54,11 @@ table inet {{ cluster_firewall_table }} {
   # `to` mapping does not matter) pass. Everything else that is dnat'ed is dropped, so a job that publishes a port is not open to the world.
   # Packets routed directly to a container's ip (not dnat'ed) are dropped too, except from the cluster and the bridges.
   chain forward {
-    type filter hook forward priority filter; policy accept;
+    type filter hook forward priority filter; policy drop;
+
+    # replies of connections that were allowed; the rules below only see new ones (docker's own FORWARD chain is not relied on)
+    ct state established,related accept
+    ct state invalid drop
 
     # containers of the network "{{ cluster_egress_cni_name }}" (mode = "cni/{{ cluster_egress_cni_name }}") may reach anything
     iifname "{{ cluster_egress_bridge }}" accept
@@ -70,6 +74,8 @@ table inet {{ cluster_firewall_table }} {
     ct status dnat ct original proto-dst { {{ cluster_firewall_public_tcp_ports | join(', ') }} } accept
 {% endif %}
     ct status dnat counter drop
+    # explicit, not only the policy: anything no rule above allowed
+    counter drop
   }
 
   # dns of the containers: all of them are told to ask {{ cluster_dns_docker_bridge_ip }} (docker's `dns`), where the restricted resolver answers

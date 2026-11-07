@@ -8,6 +8,9 @@ nomad_ip: "{{ cluster_ip }}"
 nomad_interface: "{{ cluster_interface_effective }}"
 # docker capabilities jobs may add, beyond nomad's defaults: the wireguard sidecar of traefik needs net_admin (ingress nodes only)
 nomad_docker_extra_caps: "{{ ['net_admin'] if (cluster_traefik_wireguard and inventory_hostname in groups['cluster_ingress'] | default([])) else [] }}"
+# /v1/metrics answers WITHOUT a token (nomad does not ACL-protect it) and every container reaches the api port. Allocation and node metrics name
+# jobs, tasks and their resource use: off by default, only the agent's own runtime metrics remain. A scraper that needs them: true.
+nomad_publish_workload_metrics: false
 nomad_docker_default_caps: [audit_write, chown, dac_override, fowner, fsetid, kill, mknod, net_bind_service, setfcap, setgid, setpcap, setuid, sys_chroot]
 
 # nomad agents register themselves in consul with this token (minted by tofu-consul)

@@ -58,6 +58,14 @@
       vars:
         cluster_ssh_key_type: "{{ (lookup('ansible.builtin.file', cluster_ssh_key_file ~ '.pub') | trim).split(' ')[0] }}"
 
+    - name: Exactly one ingress node
+      ansible.builtin.assert:
+        that: (groups['cluster_ingress'] | default([])) | length == 1
+        fail_msg: >-
+          The group cluster_ingress has {{ (groups['cluster_ingress'] | default([])) | length }} nodes, it needs exactly one: traefik runs as a single
+          instance and DNS points at one node. (More public entry points: run another cluster, or put a load balancer in front.)
+        quiet: true
+
     - name: Authelia has a node to run on
       ansible.builtin.assert:
         that:
@@ -65,7 +73,7 @@
           - cluster_authelia_hosts | difference(groups['cluster_clients'] | default([])) | length == 0
         fail_msg: >-
           cluster_authelia_hosts is {{ cluster_authelia_hosts }}: Authelia needs at least one node, and every one must be a Nomad client
-          (the default is the first node of the group cluster_ingress).
+          (the default is the ingress node).
         quiet: true
 
     - name: Wireguard for traefik is fully configured

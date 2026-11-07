@@ -12,6 +12,10 @@ Notable changes per version. Older history is in git.
   Existing clusters are migrated by the next `task deploy:ansible`. New: role `consul` tasks `token` / `handover`, `cluster_consul_ops_token`.
 - Authelia sessions: 18h inactivity, 24h lifetime, "remember me" off (`authelia_session_remember_me: -1`; were 7 days).
 - The cluster CA is name-constrained (critical `nameConstraints`: `cluster_domain`, `cluster_node_domain`, `.consul`, `.nomad`, `host.internal`, `localhost`, loopback + private IPv4 ranges; `cluster_ca_permitted_*`). Existing CAs are not changed: to get the constraint make a new CA (`pki/ca.pem` and `ca.sops.yml` deleted, `task pki:ca`) and redeploy; the nodes' short hostnames are no longer certificate names (the FQDN is).
+- `cluster_ingress` must have exactly one node (checked by site.yml): traefik is a single instance and DNS points at one node. `cluster_authelia_hosts` defaults to that node.
+- Nomad: `/v1/metrics` needs no token and every container reaches the api port, so allocation and node metrics are no longer published (`nomad_publish_workload_metrics`, default false).
+- Firewall: the forward chain has policy drop, accepts established / related traffic first and ends in an explicit drop (no reliance on docker's FORWARD chain). The ssh rate limit of IPv6 sources counts per /64.
+- Authelia templates: every interpolated value is `to_json` (a `'` in a display name no longer breaks the YAML).
 - Jobs (`cluster_jobs`) are run with the deployer token from tofu-nomad (`cluster_jobs_token`), not the management token (bootstrap, tofu-nomad, backup, restore, TOTP).
 - Firewall: new ssh connections are rate limited per source address (`cluster_firewall_ssh_rate`, default 10/minute, burst 10, `''` = off); the cluster's subnets are exempt.
 - tofu: the clear text variables file (tokens, secrets) is deleted from tmpfs right after each apply.

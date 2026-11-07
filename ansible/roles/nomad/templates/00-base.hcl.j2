@@ -19,6 +19,6 @@ advertise {
 telemetry {
   collection_interval = "15s"
   prometheus_metrics = true
-  publish_allocation_metrics = true
-  publish_node_metrics = true
+  publish_allocation_metrics = {{ nomad_publish_workload_metrics | bool | lower }}
+  publish_node_metrics = {{ nomad_publish_workload_metrics | bool | lower }}
 }
