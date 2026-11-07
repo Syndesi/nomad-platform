@@ -29,8 +29,8 @@ cluster_nomad_http_port: 4646
 cluster_consul_https_port: 8501
 
 # Docker images of the default jobs
-cluster_traefik_image: traefik:v3.7.1
-cluster_authelia_image: authelia/authelia:4.39.20
+cluster_traefik_image: traefik:v3.7.17
+cluster_authelia_image: authelia/authelia:4.39.28
 
 # Host volumes of the nomad clients (nodes differ, so set this per node or per group in the cluster repo's
 # inventory/host_vars/<node>.yml or group_vars/<group>.yml; a list is replaced, not merged, so use one place per node):
