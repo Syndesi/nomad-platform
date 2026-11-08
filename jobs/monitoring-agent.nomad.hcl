@@ -145,7 +145,8 @@ job "monitoring-agent" {
       # No docker socket: the logs come through the proxy task (below)
       user = "0"
 
-      # templates that read the consul catalog (services) log in to consul with the task's workload identity (policy-nomad-tasks: read the catalog)
+      # templates that read the consul catalog (services) log in to consul with the task's workload identity (policy-nomad-tasks: read the catalog). Nomad always hands this token to the task too (env CONSUL_TOKEN / CONSUL_HTTP_TOKEN, secrets/consul_token);
+      # identity env / file only concern the nomad token. It can read the catalog and nothing else, and expires after the ttl.
       identity {
         name = "consul_default"
         aud  = ["consul.io"]

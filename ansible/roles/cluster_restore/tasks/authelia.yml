@@ -31,6 +31,15 @@
         owner: root
         group: root
 
+    # a client that is not a server has not had the nomad role yet (it creates this folder): same owner and mode
+    - name: The authelia folder exists
+      ansible.builtin.file:
+        path: "{{ cluster_restore_inst.dir }}"
+        state: directory
+        mode: "0700"
+        owner: "{{ cluster_authelia_uid | int }}"
+        group: "{{ cluster_authelia_uid | int }}"
+
     - name: Decrypt on the controller (tmpfs)
       ansible.builtin.shell: >-
         set -o pipefail; umask 077;

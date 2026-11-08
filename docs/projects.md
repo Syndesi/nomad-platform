@@ -150,7 +150,7 @@ service keeps its session, an `ssh host 'bash connect.sh'` followed by another `
 
 What the runner needs: root or `sudo`, `wireguard-tools` and the WireGuard kernel module (in a container: `--cap-add NET_ADMIN` and the module of the host),
 and either a `wstunnel` binary (`WSTUNNEL_BIN`, or in `PATH`), or `docker` (the pinned image is used with `--network host`; run through `sudo` when you are not root), or `curl` (the pinned release is
-downloaded; set `WSTUNNEL_SHA256` to have it checked). `curl` is used for the check.
+downloaded; `WSTUNNEL_SHA256`, the sha256 of the release archive, is required for that and the download is refused without it or when it differs). `curl` is used for the check.
 
 ### GitHub Actions
 

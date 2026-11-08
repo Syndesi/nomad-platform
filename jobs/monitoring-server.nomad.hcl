@@ -235,17 +235,19 @@ job "monitoring-server" {
         destination = "/var/lib/postgresql/data"
       }
 
+      # a file, not an environment variable: the environment of a container is visible in `docker inspect` (and the docker api that vector reads)
       template {
-        data        = <<-EOT
-          {{ with nomadVar "nomad/jobs/monitoring-server" }}POSTGRES_PASSWORD={{ .postgres_password }}{{ end }}
-        EOT
-        destination = "secrets/postgres.env"
-        env         = true
+        data        = "{{ with nomadVar \"nomad/jobs/monitoring-server\" }}{{ .postgres_password }}{{ end }}"
+        destination = "secrets/postgres_password"
+        perms       = "0400"
+        uid         = parseint(var.uid_postgres, 10)
+        gid         = parseint(var.uid_postgres, 10)
       }
       env {
-        POSTGRES_USER = "grafana"
-        POSTGRES_DB   = "grafana"
-        PGDATA        = "/var/lib/postgresql/data/pgdata"
+        POSTGRES_PASSWORD_FILE = "/secrets/postgres_password"
+        POSTGRES_USER          = "grafana"
+        POSTGRES_DB            = "grafana"
+        PGDATA                 = "/var/lib/postgresql/data/pgdata"
       }
 
       config {
@@ -576,17 +578,35 @@ job "monitoring-server" {
         destination = "/var/lib/grafana"
       }
 
+      # the secrets are files read through grafana.ini ($__file{}), not environment variables: the environment of a container is visible in
+      # `docker inspect` (and the docker api that vector reads)
       template {
-        data        = <<-EOT
-          {{ with nomadVar "nomad/jobs/monitoring-server" }}
-          GF_DATABASE_PASSWORD={{ .postgres_password }}
-          GF_SECURITY_SECRET_KEY={{ .grafana_secret_key }}
-          GF_SECURITY_ADMIN_PASSWORD={{ .grafana_admin_password }}
-          GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET={{ .oidc_client_secret }}
-          {{ end }}
-        EOT
-        destination = "secrets/grafana.env"
-        env         = true
+        data        = "{{ with nomadVar \"nomad/jobs/monitoring-server\" }}{{ .postgres_password }}{{ end }}"
+        destination = "secrets/db_password"
+        perms       = "0400"
+        uid         = parseint(var.uid_grafana, 10)
+        gid         = parseint(var.uid_grafana, 10)
+      }
+      template {
+        data        = "{{ with nomadVar \"nomad/jobs/monitoring-server\" }}{{ .grafana_secret_key }}{{ end }}"
+        destination = "secrets/secret_key"
+        perms       = "0400"
+        uid         = parseint(var.uid_grafana, 10)
+        gid         = parseint(var.uid_grafana, 10)
+      }
+      template {
+        data        = "{{ with nomadVar \"nomad/jobs/monitoring-server\" }}{{ .grafana_admin_password }}{{ end }}"
+        destination = "secrets/admin_password"
+        perms       = "0400"
+        uid         = parseint(var.uid_grafana, 10)
+        gid         = parseint(var.uid_grafana, 10)
+      }
+      template {
+        data        = "{{ with nomadVar \"nomad/jobs/monitoring-server\" }}{{ .oidc_client_secret }}{{ end }}"
+        destination = "secrets/oidc_client_secret"
+        perms       = "0400"
+        uid         = parseint(var.uid_grafana, 10)
+        gid         = parseint(var.uid_grafana, 10)
       }
 
       template {
@@ -602,10 +622,13 @@ job "monitoring-server" {
           host = 127.0.0.1:5432
           name = grafana
           user = grafana
+          password = $__file{/secrets/db_password}
           ssl_mode = disable
           [security]
           # the emergency admin (https://grafana.<zone>/login?disableAutoLogin=true); everybody else logs in through authelia
           admin_user = admin
+          admin_password = $__file{/secrets/admin_password}
+          secret_key = $__file{/secrets/secret_key}
           disable_gravatar = true
           cookie_secure = true
           cookie_samesite = lax
@@ -629,6 +652,7 @@ job "monitoring-server" {
           enabled = true
           name = Authelia
           client_id = grafana
+          client_secret = $__file{/secrets/oidc_client_secret}
           scopes = openid profile email groups
           auth_url = https://auth.${var.zone}/api/oidc/authorization
           # server-side calls: auth.<zone>:443 is the sidecar of this allocation (see the service monitoring-grafana-mesh); authelia-internal's certificate has that name
@@ -712,7 +736,8 @@ job "monitoring-server" {
       driver = "docker"
       user   = var.uid_gatus
 
-      # templates that read the consul catalog (services) log in to consul with the task's workload identity (policy-nomad-tasks: read the catalog)
+      # templates that read the consul catalog (services) log in to consul with the task's workload identity (policy-nomad-tasks: read the catalog). Nomad always hands this token to the task too (env CONSUL_TOKEN / CONSUL_HTTP_TOKEN, secrets/consul_token);
+      # identity env / file only concern the nomad token. It can read the catalog and nothing else, and expires after the ttl.
       identity {
         name = "consul_default"
         aud  = ["consul.io"]

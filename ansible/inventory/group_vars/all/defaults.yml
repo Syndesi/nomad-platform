@@ -235,6 +235,13 @@ cluster_traefik_wireguard: false
 # The user id traefik runs as in its container (0 = root, the image's own: not needed any more, also not with cluster_traefik_wireguard: its tunnel is a sidecar).
 cluster_traefik_uid: 65532
 cluster_wireguard_image: linuxserver/wireguard:1.0.20260223
+# The public entry point (websecure): a request must arrive within the read timeout, its answer must be written within the write timeout, and one source
+# address may have this many requests in flight. 10 minutes: long downloads and plain http streams (e.g. ntfy's json stream) fit; lower them if no app
+# needs that (the entry point of the VPN has 600s as well).
+cluster_traefik_public_read_timeout: 600s
+cluster_traefik_public_write_timeout: 600s
+cluster_traefik_public_inflight: 100
+
 # traefik's prometheus metrics: own entry point and port, consul service "traefik-metrics", for the cluster only (the firewall limits it
 # to cluster_subnets), not routed by traefik. A scraper job finds them through consul.
 cluster_traefik_metrics: true

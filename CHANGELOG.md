@@ -27,6 +27,11 @@ Notable changes per version. Older history is in git.
 - **Tetragon** (role `tetragon`, `docs/reference.md` "Runtime security"): eBPF runtime security on every node, from the pinned static release (same files on Alpine and
   Ubuntu). Json event log, Prometheus metrics on the node's cluster address (port 2112, firewall: cluster subnets), shipped policy presets
   (`cluster_tetragon_presets`: `network-connect`, `block-metadata-service` which enforces); quiet filters on by default (`cluster_tetragon_quiet_runtime|quiet_deploys|slim_events`: container plumbing, the ansible user's deploys except sudo, capability/namespace fields), no `binary` metric label and the cluster repo's `tetragon.d/*.yaml`. Off with `cluster_tetragon_enabled: false`.
+- **Hardening (review):** HSTS on every name behind traefik (middleware `hsts`, first on `websecure` and `vpn`; was: ops names only). The public entry point allows at most 100 requests in flight per
+  source address (`cluster_traefik_public_inflight`; timeouts `cluster_traefik_public_read_timeout|write_timeout` are variables now, 600s as before). Grafana, Postgres and ntfy
+  get their secrets as files (`$__file{}`, `POSTGRES_PASSWORD_FILE`, ntfy `server.yml`), no longer as container environment (`docker inspect`). The scripts pass the nomad / consul tokens to
+  the node on stdin, not in the command line (`cluster_exec_tokens`; /proc and Tetragon's exec log). The dnsmasq of traefik's namespace lost `NET_ADMIN`. `connect.sh` requires
+  `WSTUNNEL_SHA256` when it downloads wstunnel. `task restore` restores authelia / step-ca on any client, not only on a server. Docs: authelia runs on the ingress node by default everywhere.
 - **Hardening:** the docker socket of the monitoring agent is behind a filtering proxy (task `docker-proxy`, GET of containers / events only; vector has no socket);
   the monitoring server's tasks run with `cap_drop ALL` and a read-only root filesystem; `block-metadata-service` also blocks `fd00:ec2::254` (IPv6); the Consul
   token of the Nomad agents has `intentions = "read"` (a leaked token could not allow itself into a service). Apply with `task deploy:tofu` / `deploy:ansible`.

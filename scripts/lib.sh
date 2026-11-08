@@ -44,6 +44,17 @@ cluster_exec() {
   ${tpl//%HOST%/$host} "$@"
 }
 
+# cluster_exec_tokens <host> <nomad token> <consul token> <script> [stdin file]: run a script (sh -lc) with NOMAD_TOKEN / CONSUL_HTTP_TOKEN in its environment.
+# The tokens travel on stdin (the first two lines), never in the command line: that is visible in /proc/*/cmdline and in tetragon's exec events
+# (-> the node's log, -> loki). An empty token is left unset. The stdin of the script is the optional file, else nothing.
+cluster_exec_tokens() {
+  local host=$1 nt=$2 ct=$3 script=$4 in=${5:-/dev/null}
+  # shellcheck disable=SC2016 # the remote shell expands the variables, not this one
+  { printf '%s\n%s\n' "$nt" "$ct"; cat "$in"; } | cluster_exec "$host" sh -c \
+    'IFS= read -r NOMAD_TOKEN; IFS= read -r CONSUL_HTTP_TOKEN; [ -n "$NOMAD_TOKEN" ] || unset NOMAD_TOKEN; [ -n "$CONSUL_HTTP_TOKEN" ] || unset CONSUL_HTTP_TOKEN
+     export NOMAD_TOKEN CONSUL_HTTP_TOKEN; exec sh -lc "$1"' sh "$script"
+}
+
 # cluster_root <host> <shell command>: run a command as root on a node, through ansible (become, with the stored password if
 # there is one: group_vars ansible_become_password). Prints the command's stdout, returns its exit status; 255 = unreachable.
 # Used where a script needs root; everything else runs unprivileged through cluster_exec.

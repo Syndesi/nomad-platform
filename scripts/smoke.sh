@@ -10,7 +10,7 @@ domain=${CLUSTER_DOMAIN:-$(cvar cluster_domain)}
 nt=$("$BASE/scripts/tofu-enc.sh" tofu-nomad output -json nomad_tokens | jq -r .readonly)
 ct=$("$BASE/scripts/tofu-enc.sh" tofu-consul output -json service_tokens | jq -r .readonly)
 fail=0
-on_server() { cluster_exec "$server" env "NOMAD_TOKEN=$nt" "CONSUL_HTTP_TOKEN=$ct" sh -lc "$1"; }
+on_server() { cluster_exec_tokens "$server" "$nt" "$ct" "$1"; }
 check() { # <description> <command on the server> <expected stdout (grep -x)>
   local out
   out=$(on_server "$2" 2>&1)
@@ -137,9 +137,9 @@ done
 # One container of each kind on every client node.
 mt=$(consul_ops_token)
 nm=$(nomad_ops_token)
-mgmt() { cluster_exec "$server" env "NOMAD_TOKEN=$nm" "CONSUL_HTTP_TOKEN=$mt" sh -lc "$1"; }
+mgmt() { cluster_exec_tokens "$server" "$nm" "$mt" "$1" "${2:-}"; } # <script> [file for its stdin]
 echo "-- container networks (bridge: closed, cni/egress: open) and their dns"
-mgmt "cat > /tmp/network.nomad.hcl" < "$BASE/tests/network.nomad.hcl"
+mgmt "cat > /tmp/network.nomad.hcl" "$BASE/tests/network.nomad.hcl"
 if mgmt "nomad job run -var datacenter=$(cvar cluster_datacenter) -var clients=$clients /tmp/network.nomad.hcl" >/tmp/network-run.log 2>&1; then
   echo "ok    network-test deployed: a container of each kind on every client"
   in_alloc() { mgmt "nomad alloc exec -task t $1 sh -c \"$2 >/dev/null 2>&1 && echo yes || echo no\"" 2>&1 | tail -1; }
@@ -177,8 +177,8 @@ if [ "${1:-}" = connect ]; then
   echo "-- consul connect (envoy sidecars through the cni bridge)"
   mt=$(consul_ops_token)
   nm=$(nomad_ops_token)
-  mgmt() { cluster_exec "$server" env "NOMAD_TOKEN=$nm" "CONSUL_HTTP_TOKEN=$mt" sh -lc "$1"; }
-  mgmt "cat > /tmp/connect.nomad.hcl" < "$BASE/tests/connect.nomad.hcl"
+  mgmt() { cluster_exec_tokens "$server" "$nm" "$mt" "$1" "${2:-}"; } # <script> [file for its stdin]
+  mgmt "cat > /tmp/connect.nomad.hcl" "$BASE/tests/connect.nomad.hcl"
   mgmt "consul intention create -replace -allow count-client count-api >/dev/null 2>&1 || true"
   if mgmt "nomad job run -var datacenter=$(cvar cluster_datacenter) /tmp/connect.nomad.hcl" >/tmp/connect-run.log 2>&1; then echo "ok    job deployed (both groups healthy)"; else echo "FAIL  job deploy"; tail -15 /tmp/connect-run.log; fail=1; fi
   alloc=$(mgmt "nomad job allocs -json connect-test | jq -r '.[]|select(.TaskGroup==\"client\")|.ID' | head -1")
@@ -197,7 +197,7 @@ if [ "${1:-}" = connect ]; then
   stepca=$(cvar cluster_stepca_enabled)
   if [ "$stepca" = True ] || [ "$stepca" = true ]; then
     # a workload without an intention to step-ca must not get an answer from it (default deny)
-    mgmt "cat > /tmp/stepca-probe.nomad.hcl" < "$BASE/tests/stepca-probe.nomad.hcl"
+    mgmt "cat > /tmp/stepca-probe.nomad.hcl" "$BASE/tests/stepca-probe.nomad.hcl"
     mgmt "nomad job run -detach -var datacenter=$(cvar cluster_datacenter) /tmp/stepca-probe.nomad.hcl >/dev/null 2>&1; true"
     pa=""; out=""
     for _ in $(seq 30); do

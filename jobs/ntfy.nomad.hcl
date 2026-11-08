@@ -114,21 +114,29 @@ job "ntfy" {
         NTFY_WEB_ROOT             = "app"
       }
 
+      # the users, their access and the token are in a config file, not in environment variables: the environment of a container is visible in
+      # `docker inspect` (and the docker api that vector reads). The rest of the settings (not secret) stay in the env block above.
       template {
         data        = <<-EOT
           {{ with nomadVar "nomad/jobs/ntfy" -}}
-          NTFY_AUTH_USERS=admin:{{ .admin_hash }}:admin,alertmanager:{{ .alertmanager_hash }}:user
-          NTFY_AUTH_ACCESS=alertmanager:${var.topic}:write-only
-          NTFY_AUTH_TOKENS=alertmanager:{{ .alertmanager_token }}:alertmanager
+          auth-users:
+            - "admin:{{ .admin_hash }}:admin"
+            - "alertmanager:{{ .alertmanager_hash }}:user"
+          auth-access:
+            - "alertmanager:${var.topic}:write-only"
+          auth-tokens:
+            - "alertmanager:{{ .alertmanager_token }}:alertmanager"
           {{- end }}
         EOT
-        destination = "secrets/ntfy.env"
-        env         = true
+        destination = "secrets/server.yml"
+        perms       = "0400"
+        uid         = parseint(var.uid, 10)
+        gid         = parseint(var.uid, 10)
       }
 
       config {
         image           = var.image
-        args            = ["serve"]
+        args            = ["serve", "--config", "/secrets/server.yml"]
         ports           = ["http", "metrics"]
         cap_drop        = ["ALL"]
         readonly_rootfs = true

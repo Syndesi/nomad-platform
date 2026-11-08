@@ -4,7 +4,7 @@
 # Config and users live in the Nomad variable nomad/jobs/<name> (written by tofu-nomad from
 # the cluster's authelia.yml + secrets), so no secret is part of this spec.
 # The sqlite database (totp secrets, devices, bans) is on the host volume "authelia" (/srv/authelia on the node, made by the nomad role),
-# so the job is bound to the nodes that have it (client meta authelia = true: the servers by default) and survives redeployments.
+# so the job is bound to the nodes that have it (client meta authelia = true: the ingress node by default, cluster_authelia_hosts) and survives redeployments.
 # The rendered config (session secret, storage key, password hashes) goes to secrets/ (mounted as /secrets, not readable through `nomad alloc fs`), mode 0600.
 # Port 9091 (https) is published on the node's cluster address; the firewall's forward chain drops it for everything outside the cluster.
 # Hardened like traefik: not root (variable user: the id owns the database folder and the key), all capabilities dropped, a read-only root

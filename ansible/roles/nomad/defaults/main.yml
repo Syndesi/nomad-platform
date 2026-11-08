@@ -6,7 +6,7 @@ nomad_is_server: "{{ inventory_hostname in groups['cluster_servers'] | default([
 nomad_is_client: "{{ inventory_hostname in groups['cluster_clients'] | default([]) }}"
 nomad_ip: "{{ cluster_ip }}"
 nomad_interface: "{{ cluster_interface_effective }}"
-# docker capabilities jobs may add, beyond nomad_docker_default_caps: the vpn sidecars of traefik (wireguard, dnsmasq, nftables) need net_admin (ingress nodes only)
+# docker capabilities jobs may add, beyond nomad_docker_default_caps: the vpn sidecars of traefik (wireguard, nftables) need net_admin (ingress nodes only)
 nomad_docker_extra_caps: "{{ ['net_admin'] if inventory_hostname in groups['cluster_ingress'] | default([]) else [] }}"
 # /v1/metrics answers WITHOUT a token (nomad does not ACL-protect it) and every container reaches the api port. Allocation and node metrics name
 # jobs, tasks and their resource use: off without the monitoring stack (only the agent's own runtime metrics remain), on with it (cluster_monitoring_enabled:

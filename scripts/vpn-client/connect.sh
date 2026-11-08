@@ -4,7 +4,7 @@
 # Written by scripts/vpn.sh into secrets/vpn/<device>/ (or the bundle of `task project:export`); it reads connect.env and the key files next to it.
 #   bash connect.sh          up; prints what it set. On GitHub / Forgejo Actions (GITHUB_ENV is set) the variables below go into the environment of the next steps
 #   Needs: root or sudo, wireguard-tools (wg-quick) and the wireguard kernel module, a wstunnel binary OR docker (see WSTUNNEL_BIN), curl for the check.
-#   Environment (all optional): WSTUNNEL_BIN (path of a binary), WSTUNNEL_SHA256 (checked when the binary is downloaded), CONNECT_DIR (state dir; default $RUNNER_TEMP, else $XDG_RUNTIME_DIR, else /dev/shm)
+#   Environment (all optional): WSTUNNEL_BIN (path of a binary), WSTUNNEL_SHA256 (REQUIRED when the binary is downloaded, i.e. no binary on the PATH / WSTUNNEL_BIN and no docker), CONNECT_DIR (state dir; default $RUNNER_TEMP, else $XDG_RUNTIME_DIR, else /dev/shm)
 # Sets: NOMAD_ADDR, NOMAD_CACERT, CONSUL_HTTP_ADDR, CONSUL_CACERT, and NOMAD_TOKEN / CONSUL_HTTP_TOKEN when nomad.token / consul.token sit next to this file.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -30,10 +30,11 @@ export SSL_CERT_FILE="$here/ca.pem"   # wstunnel trusts the cluster root for the
 bin=${WSTUNNEL_BIN:-$(command -v wstunnel || true)}
 if [ -z "$bin" ] && ! command -v docker >/dev/null; then
   case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) die "no wstunnel binary for $(uname -m): set WSTUNNEL_BIN" ;; esac
+  [ -n "${WSTUNNEL_SHA256:-}" ] || die "no wstunnel binary on the PATH and no docker: set WSTUNNEL_BIN, or WSTUNNEL_SHA256 (sha256 of the release archive for $arch) to download the pinned release"
   url="https://github.com/erebe/wstunnel/releases/download/$WSTUNNEL_VERSION/wstunnel_${WSTUNNEL_VERSION#v}_linux_$arch.tar.gz"
   echo "connect: downloading $url"
   curl -fsSL "$url" -o "$state/wstunnel.tgz"
-  [ -z "${WSTUNNEL_SHA256:-}" ] || echo "$WSTUNNEL_SHA256  $state/wstunnel.tgz" | sha256sum -c - >/dev/null || die "wstunnel download: checksum differs"
+  echo "$WSTUNNEL_SHA256  $state/wstunnel.tgz" | sha256sum -c - >/dev/null || { rm -f "$state/wstunnel.tgz"; die "wstunnel download: checksum differs"; }
   tar -xzf "$state/wstunnel.tgz" -C "$state" wstunnel && rm -f "$state/wstunnel.tgz"; bin=$state/wstunnel
 fi
 if [ -n "$bin" ]; then

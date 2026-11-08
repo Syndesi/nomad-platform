@@ -502,8 +502,10 @@
           delay: 2
           changed_when: false
 
+# On the clients and not on the servers: authelia's and step-ca's nodes are clients (checked above), but not necessarily servers (the ingress node is
+# authelia's by default). The folders are made here if the nomad role (which runs after this play on a client that is not a server) has not yet.
 - name: Restore the authelia folders (task restore)
-  hosts: cluster_servers
+  hosts: cluster_clients
   become: true
   gather_facts: false
   tasks:

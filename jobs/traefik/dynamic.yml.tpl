@@ -142,12 +142,24 @@ http:
         average: 10
         period: 1m
         burst: 5
-    # the ops names: HSTS and the usual browser headers (the apps set their own)
-    admin-headers:
+    # HSTS for every name behind traefik: both entry points have it first in their middlewares (static.yml.tpl), the ops names and the apps alike.
+    # It replaces the header of an app. No preload: that is a decision for the domain, not for the platform.
+    hsts:
       headers:
         stsSeconds: 31536000
         stsIncludeSubdomains: true
         forceSTSHeader: true
+    # the public entry point: at most this many requests in flight per source address (slow requests pile up here first). Long-lived streams count while they
+    # are open; websockets too.
+    inflight-public:
+      inFlightReq:
+        amount: {{ env "TPL_PUBLIC_INFLIGHT" }}
+        sourceCriterion:
+          ipStrategy:
+            depth: 0
+    # the ops names: the usual browser headers (the apps set their own; HSTS is the middleware above)
+    admin-headers:
+      headers:
         contentTypeNosniff: true
         frameDeny: true
         referrerPolicy: no-referrer

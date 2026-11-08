@@ -10,7 +10,7 @@ case "${1:-status}" in
   status)
     nt=$("$BASE/scripts/tofu-enc.sh" tofu-nomad output -json nomad_tokens | jq -r .readonly)
     ct=$("$BASE/scripts/tofu-enc.sh" tofu-consul output -json service_tokens | jq -r .readonly)
-    cluster_exec "$server" env "NOMAD_TOKEN=$nt" "CONSUL_HTTP_TOKEN=$ct" sh -lc '
+    cluster_exec_tokens "$server" "$nt" "$ct" '
       echo == consul members; consul members
       echo == nomad servers; nomad server members
       echo == nomad nodes; nomad node status

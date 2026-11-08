@@ -24,13 +24,13 @@ trap 'rm -rf "$work"; [ -e "$out/.complete" ] || { echo "backup failed, removing
 nm=$(nomad_ops_token)
 cm=$(consul_ops_token)
 
-# snapshot <file> <env assignment> <snapshot save command>: the server writes it into a private temp dir and streams it back
+# snapshot <file> <nomad token> <consul token> <snapshot save command>: the server writes it into a private temp dir and streams it back
 snapshot() {
-  cluster_exec "$server" env "$2" sh -lc "umask 077; d=\$(mktemp -d); trap 'rm -rf \$d' EXIT; $3 \$d/s.snap >/dev/null && cat \$d/s.snap" \
+  cluster_exec_tokens "$server" "$2" "$3" "umask 077; d=\$(mktemp -d); trap 'rm -rf \$d' EXIT; $4 \$d/s.snap >/dev/null && cat \$d/s.snap" \
     | age "${rflags[@]}" > "$out/$1.snap.age"
 }
-snapshot nomad "NOMAD_TOKEN=$nm" "nomad operator snapshot save"
-snapshot consul "CONSUL_HTTP_TOKEN=$cm" "consul snapshot save"
+snapshot nomad "$nm" "" "nomad operator snapshot save"
+snapshot consul "" "$cm" "consul snapshot save"
 
 # The tofu states of the two roots hold the ids and secrets of the acl objects that are in these snapshots. They belong to the snapshots:
 # a restore needs the states of this very moment (they are encrypted by tofu already; age-encrypted again like everything here).

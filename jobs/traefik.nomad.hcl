@@ -120,6 +120,20 @@ variable "templates_dir" {
   type    = string
   default = "traefik"
 }
+# the public entry point (websecure): how long a request may take to arrive and its answer to be written (traefik duration, "600s"), and how many requests
+# one source address may have in flight at the same time
+variable "public_read_timeout" {
+  type    = string
+  default = "600s"
+}
+variable "public_write_timeout" {
+  type    = string
+  default = "600s"
+}
+variable "public_inflight" {
+  type    = number
+  default = 100
+}
 # 0 = no metrics. Otherwise prometheus metrics on their own entry point and port (not the web ports), registered as the consul service
 # "traefik-metrics". Bound to the allocation's address, never to the tunnel.
 variable "metrics_port" {
@@ -580,7 +594,7 @@ EOT
         entrypoint      = ["dnsmasq"]
         args            = ["-k", "-C", "/local/dnsmasq.conf"]
         cap_drop        = ["ALL"]
-        cap_add         = ["NET_BIND_SERVICE", "NET_ADMIN", "SETUID", "SETGID"]
+        cap_add         = ["NET_BIND_SERVICE", "SETUID", "SETGID"]
         readonly_rootfs = true
       }
 
@@ -664,6 +678,9 @@ EOT
         TPL_CONSUL_PORT            = var.consul_port
         TPL_NOMAD_PORT             = var.nomad_port
         TPL_TLS_RESOLVER           = var.tls_resolver
+        TPL_PUBLIC_READ_TIMEOUT    = var.public_read_timeout
+        TPL_PUBLIC_WRITE_TIMEOUT   = var.public_write_timeout
+        TPL_PUBLIC_INFLIGHT        = var.public_inflight
         TPL_STEPCA_ACME_URL        = var.stepca_acme_url
         TPL_STEPCA_HOURS           = var.stepca_cert_hours
         # lego (traefik's ACME client) trusts the cluster root in addition to the system roots: step-ca's own certificate is signed by it

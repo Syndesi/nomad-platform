@@ -54,6 +54,9 @@ registration use it (`nomad_ops_token` in `scripts/lib.sh`, `cluster_nomad_ops_t
 `nomad_acl`, tasks `token` / `handover`). The one exception is `task restore`: it needs the bootstrap token to restore the snapshot into the fresh cluster
 (the snapshot brings the old ops token back).
 
+The scripts hand a token to the node on **stdin**, never in the command line (`cluster_exec_tokens` in `scripts/lib.sh`; `/proc/*/cmdline` and Tetragon's exec
+events, and so the node's log and Loki, would show it).
+
 ## Automatic updates
 
 Every node installs updates by itself every `cluster_updates_interval_hours` (12, role `cluster_updates`; `cluster_updates_enabled: false` switches it off).
@@ -111,6 +114,17 @@ two ciphers and `ssh-ed25519` keys (`cluster_ssh_*`). The automation key is gene
 
 By default `sudo` (Ubuntu) / `doas` (Alpine) are passwordless for the `ansible` user. `task become:password` stores a password
 (sops) that the next deploy sets and requires; going back needs the bootstrap script or console access.
+
+## The public entry point
+
+`websecure` (tcp/443, every public name and the apps) is the internet edge, and so it is the strictest of the entry points:
+
+* **HSTS on every name** behind Traefik, the public ones (apps, ntfy, `auth.`) and the internal zone: the middleware `hsts` (one year, `includeSubdomains`, no `preload`) is the first of the
+  default middlewares of `websecure` and `vpn`, so it also covers a job that sets its own tags and the answers of Authelia (a login redirect). It replaces an HSTS header of the app.
+  The port 80 redirect cannot carry it (browsers ignore it over http).
+* **Timeouts and a limit of requests in flight**: `cluster_traefik_public_read_timeout` / `_write_timeout` (600s each, like the entry point of the VPN; lower them if no app needs
+  long downloads or plain http streams such as ntfy's json stream, which are cut at the write timeout) and `cluster_traefik_public_inflight` (100): at most that many requests in
+  flight per source address (`inflight-public`). The VPN's wstunnel traffic is a TCP router with TLS passthrough and not subject to them; websockets neither.
 
 ## Internal services behind a VPN (zone `<cluster_name>.internal`)
 
