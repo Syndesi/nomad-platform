@@ -1,0 +1,27 @@
+---
+# ENFORCE: a process in a container that connects to 169.254.169.254 (the metadata service of cloud providers: instance credentials) is killed (SIGKILL)
+# before the connection is made. The event shows up in the log like any other policy event. Processes of the host itself are not affected.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: cluster-block-metadata-service
+spec:
+  kprobes:
+    - call: tcp_connect
+      syscall: false
+      args:
+        - index: 0
+          type: sock
+      selectors:
+        - matchNamespaces:
+            - namespace: Pid
+              operator: NotIn
+              values:
+                - host_ns
+          matchArgs:
+            - index: 0
+              operator: DAddr
+              values:
+                - 169.254.169.254/32
+          matchActions:
+            - action: Sigkill

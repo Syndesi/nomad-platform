@@ -22,7 +22,7 @@ cluster_firewall_ssh_burst: 10
 # Raw nft rules appended to the input chain before the final drop (the cluster's own services), e.g. "tcp dport 9100 accept"
 cluster_firewall_extra_rules: ""
 
-cluster_firewall_tcp_ports: "{{ [cluster_nomad_http_port, 4647, 4648, 8300, 8301] + cluster_firewall_cluster_only_ports }}"
+cluster_firewall_tcp_ports: "{{ [cluster_nomad_http_port, 4647, 4648, 8300, 8301] + cluster_firewall_cluster_only_ports + ([cluster_tetragon_metrics_port] if cluster_tetragon_enabled | bool else []) }}"
 # ports of jobs that are published on the host (host network, or bridge network through nat) but only for the cluster; the nat case does not
 # pass the input chain; the forward chain drops all of it for everything that does not come from the cluster or the container bridges
 cluster_firewall_cluster_only_ports: "{{ [cluster_traefik_metrics_port] if (cluster_traefik_metrics | bool and inventory_hostname in groups['cluster_ingress'] | default([])) else [] }}"

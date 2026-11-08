@@ -1,0 +1,18 @@
+---
+- name: systemd unit
+  ansible.builtin.template:
+    src: tetragon.service.j2
+    dest: /etc/systemd/system/tetragon.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: tetragon_unit
+
+- name: systemd reads it
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: tetragon_unit is changed
+
+- name: Service changed
+  ansible.builtin.set_fact:
+    tetragon_service_changed: "{{ tetragon_unit is changed }}"

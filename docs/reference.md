@@ -205,6 +205,40 @@ is the packages (the update timers), the image pulls, and ACME with a public CA.
 stores the wg-quick config (no `DNS=`/`PostUp`/`PostDown`; keep `AllowedIPs` to the tunnel's subnets; set `PersistentKeepalive`). Set
 `cluster_wireguard_image`. Not run on a cluster yet; not needed on a VPS with a public address.
 
+## Runtime security: Tetragon
+
+Every node runs [Tetragon](https://tetragon.io) (eBPF) as a host service: systemd on Ubuntu, OpenRC on Alpine. It is the static release tarball of
+`cluster_tetragon_version`, checked against `cluster_tetragon_sha256` and unpacked to `/opt/tetragon/<version>`: the same files on both OS families, no
+build, no package. A node whose kernel has no BTF (`/sys/kernel/btf/vmlinux`) or no cgroup v2 is skipped with a message. `cluster_tetragon_enabled: false`
+stops the service.
+
+| What | Where |
+|---|---|
+| Events, one json object per line | `cluster_tetragon_log_dir/tetragon.log` (default `/var/log/tetragon`, root only). The agent rotates by size (`cluster_tetragon_log_max_size_mb`) and daily, keeps `cluster_tetragon_log_max_backups` gzipped files. Meant for promtail / Alloy / Loki |
+| The agent's own log | json; Ubuntu: journal (`journalctl -u tetragon`), Alpine: `agent.log` in the same directory (logrotate, `cluster_log_retention_days`) |
+| Prometheus metrics | `http://<node cluster address>:2112/metrics` (`cluster_tetragon_metrics_port`), reachable from the cluster subnets only (host firewall). Scrape every node; the agent also exposes `tetragon_events_total` per binary and event type |
+| Health | `127.0.0.1:6789` (node only) |
+| Command line | `tetra` on the node as root (`tetra getevents -o compact`, `tetra tracingpolicy list`); the gRPC socket is `/var/run/tetragon/tetragon.sock` |
+
+By default the agent only **observes**: process_exec / process_exit of everything on the node (host and containers, with uid, capabilities, namespaces and
+the container id). That is a lot on a busy node (the deploy itself starts thousands of processes): filter with `cluster_tetragon_config`
+(`export-denylist` / `export-allowlist`, one json filter per line).
+
+**Policies** (TracingPolicy yaml, loaded at start from `/etc/tetragon/tetragon.tp.d`):
+
+- `cluster_tetragon_presets`, shipped with the platform (none by default):
+  - `network-connect` - observe: tcp connections of container processes.
+  - `block-metadata-service` - **enforce**: a container process that connects to 169.254.169.254 is killed with SIGKILL before the connection is made.
+- the cluster repo's own: `tetragon.d/*.yaml` (jinja allowed; `.yaml.j2` too). Removing a file removes the policy. A policy with `matchActions: Sigkill`
+  or `Override` enforces, without it it only reports. Policy reference and examples: tetragon.io/docs/concepts/tracing-policy.
+
+Changing a policy, a setting or the version restarts the agent (a few seconds without events). Other flags: `cluster_tetragon_config` (flag name -> value,
+one file each in `/etc/tetragon/tetragon.conf.d`). Standalone mode has no Kubernetes metadata: containers are identified by their cgroup / docker id, not by
+Nomad job names (map them with the container labels or `docker ps`).
+
+Limits: the agent runs as root and sees every command line (so the log is root only). Enforcement kills the process, it does not give the container
+a clean error. It does not replace the network rules of the host firewall or the Docker settings above, it watches what they let through.
+
 ## Backup and restore
 
 `task backup` writes `backups/<cluster>-<time>/`: Nomad and Consul snapshots, the tofu states, the authelia database of each node that has

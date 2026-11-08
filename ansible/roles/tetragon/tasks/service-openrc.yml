@@ -1,0 +1,13 @@
+---
+- name: OpenRC init script
+  ansible.builtin.template:
+    src: tetragon.openrc.j2
+    dest: /etc/init.d/tetragon
+    owner: root
+    group: root
+    mode: "0755"
+  register: tetragon_initd
+
+- name: Service changed
+  ansible.builtin.set_fact:
+    tetragon_service_changed: "{{ tetragon_initd is changed }}"

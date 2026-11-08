@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+# {{ ansible_managed }}
+
+name="tetragon"
+description="Tetragon eBPF-based security observability and runtime enforcement"
+
+supervisor="supervise-daemon"
+command="{{ tetragon_root }}/usr/local/bin/tetragon"
+# the agent's own (json) log; rotated by role cluster_logs
+output_log="{{ cluster_tetragon_log_dir }}/agent.log"
+error_log="{{ cluster_tetragon_log_dir }}/agent.log"
+respawn_delay=5
+respawn_max=0
+# bpf maps are locked memory
+rc_ulimit="-l unlimited"
+export PATH="{{ tetragon_root }}/usr/local/lib/tetragon:${PATH}"
+
+depend() {
+    need localmount cgroups
+    after net
+}
+
+start_pre() {
+    checkpath -d -m 0755 /var/run/tetragon
+    checkpath -d -m 0750 {{ cluster_tetragon_log_dir }}
+    mountpoint -q /sys/fs/bpf || mount -t bpf bpf /sys/fs/bpf
+}

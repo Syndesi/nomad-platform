@@ -1,0 +1,178 @@
+---
+# Tetragon (eBPF runtime security): a host service on every node, the agent of the official static release (the same files run on Alpine and Ubuntu).
+# Events (process exec/exit with container and image, plus whatever the tracing policies watch) go to a json file; metrics on the node's cluster
+# address. Policies: the presets of cluster_tetragon_presets and the cluster repo's tetragon.d/*.yaml. See docs/reference.md.
+- name: Prerequisites - BTF and cgroup v2
+  block:
+    - name: Kernel BTF
+      ansible.builtin.stat:
+        path: /sys/kernel/btf/vmlinux
+      register: tetragon_btf
+
+    - name: cgroup v2
+      ansible.builtin.stat:
+        path: /sys/fs/cgroup/cgroup.controllers
+      register: tetragon_cgroup2
+
+    - name: This kernel cannot run it (no BTF or no cgroup v2)
+      ansible.builtin.debug:
+        msg: "tetragon is skipped on {{ inventory_hostname }}: {{ 'no /sys/kernel/btf/vmlinux (CONFIG_DEBUG_INFO_BTF)' if not tetragon_btf.stat.exists else 'no cgroup v2' }}"
+      when: not (tetragon_btf.stat.exists and tetragon_cgroup2.stat.exists)
+
+    - name: A supported architecture
+      ansible.builtin.assert:
+        that: tetragon_arch in cluster_tetragon_sha256
+        fail_msg: "tetragon has no pinned release for {{ ansible_facts['architecture'] }}: cluster_tetragon_sha256"
+        quiet: true
+      when: tetragon_btf.stat.exists and tetragon_cgroup2.stat.exists
+
+- name: Install and run
+  when: tetragon_btf.stat.exists and tetragon_cgroup2.stat.exists
+  block:
+    - name: Is this version installed?
+      ansible.builtin.stat:
+        path: "/opt/tetragon/{{ cluster_tetragon_version }}/usr/local/bin/tetragon"
+      register: tetragon_installed
+
+    - name: Download (pinned, checksum verified) and unpack
+      when: not tetragon_installed.stat.exists
+      block:
+        - name: Download directory
+          ansible.builtin.file:
+            path: "{{ tetragon_cache_dir }}"
+            state: directory
+            mode: "0700"
+
+        - name: Release tarball
+          ansible.builtin.get_url:
+            url: "{{ tetragon_url }}"
+            dest: "{{ tetragon_cache_dir }}/tetragon-{{ cluster_tetragon_version }}-{{ tetragon_arch }}.tar.gz"
+            checksum: "sha256:{{ cluster_tetragon_sha256[tetragon_arch] }}"
+            mode: "0600"
+            timeout: 120
+
+        - name: Version directory
+          ansible.builtin.file:
+            path: "/opt/tetragon/{{ cluster_tetragon_version }}"
+            state: directory
+            mode: "0755"
+
+        # command, not unarchive: the busybox tar of alpine is not what ansible's module expects
+        - name: Unpack
+          ansible.builtin.command:
+            argv:
+              - tar
+              - -xzf
+              - "{{ tetragon_cache_dir }}/tetragon-{{ cluster_tetragon_version }}-{{ tetragon_arch }}.tar.gz"
+              - -C
+              - "/opt/tetragon/{{ cluster_tetragon_version }}"
+              - --strip-components=1
+              - --no-same-owner
+            creates: "/opt/tetragon/{{ cluster_tetragon_version }}/usr/local/bin/tetragon"
+
+        - name: The tarball is not needed any more
+          ansible.builtin.file:
+            path: "{{ tetragon_cache_dir }}/tetragon-{{ cluster_tetragon_version }}-{{ tetragon_arch }}.tar.gz"
+            state: absent
+
+    - name: The current version
+      ansible.builtin.file:
+        src: "/opt/tetragon/{{ cluster_tetragon_version }}"
+        dest: /opt/tetragon/current
+        state: link
+      register: tetragon_link
+
+    - name: Older versions go
+      ansible.builtin.find:
+        paths: /opt/tetragon
+        file_type: directory
+        excludes: ["{{ cluster_tetragon_version }}"]
+      register: tetragon_old
+
+    - name: ... removed
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ tetragon_old.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: tetra, the command line client
+      ansible.builtin.file:
+        src: "{{ tetragon_root }}/usr/local/bin/tetra"
+        dest: /usr/local/bin/tetra
+        state: link
+
+    - name: Directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /etc/tetragon, mode: "0755" }
+        - { path: /etc/tetragon/tetragon.conf.d, mode: "0755" }
+        - { path: /etc/tetragon/tetragon.tp.d, mode: "0755" }
+        # command lines of every process: root only
+        - { path: "{{ cluster_tetragon_log_dir }}", mode: "0750" }
+
+    - name: Settings (one file per flag)
+      ansible.builtin.copy:
+        dest: "/etc/tetragon/tetragon.conf.d/{{ item.key }}"
+        content: "{{ item.value }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ (tetragon_config_base | combine(cluster_tetragon_config)) | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: tetragon_settings
+
+    - name: Settings that are not wanted any more
+      ansible.builtin.find:
+        paths: /etc/tetragon/tetragon.conf.d
+        excludes: "{{ (tetragon_config_base | combine(cluster_tetragon_config)).keys() | list }}"
+      register: tetragon_stale_settings
+
+    - name: ... removed
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ tetragon_stale_settings.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: tetragon_stale_removed
+
+    - name: Policies of the platform (presets) and of the cluster (tetragon.d)
+      ansible.builtin.include_tasks: policies.yml
+
+    - name: Service
+      ansible.builtin.include_tasks:
+        file: "service-{{ tetragon_init }}.yml"
+      vars:
+        tetragon_init: "{{ 'systemd' if ansible_facts['os_family'] == 'Debian' else 'openrc' }}"
+
+    - name: Restart when the version, the settings or the policies changed
+      ansible.builtin.service:
+        name: tetragon
+        state: restarted
+      when: >-
+        tetragon_link is changed or tetragon_settings is changed or tetragon_stale_removed is changed
+        or tetragon_policies_changed | default(false) or tetragon_service_changed | default(false)
+
+    - name: Running
+      ansible.builtin.service:
+        name: tetragon
+        enabled: true
+        state: started
+
+    - name: Metrics answer on the cluster address
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ cluster_tetragon_metrics_port }}/metrics"
+        return_content: false
+      register: tetragon_metrics
+      until: tetragon_metrics.status | default(0) == 200
+      retries: 30
+      delay: 2
+      changed_when: false

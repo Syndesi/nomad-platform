@@ -7,3 +7,4 @@ cluster_logs_files:
   - /var/log/nomad.log
   - /var/log/consul.log
   - /var/log/docker.log
+  - "{{ cluster_tetragon_log_dir }}/agent.log"

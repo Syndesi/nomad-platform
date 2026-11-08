@@ -1,0 +1,29 @@
+---
+# Internal settings of the role; what a cluster sets is cluster_tetragon_* (group_vars defaults.yml, docs/reference.md).
+tetragon_root: /opt/tetragon/current # symlink to /opt/tetragon/<version>
+tetragon_cache_dir: /var/cache/cluster-tetragon
+tetragon_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] | default('') }}"
+tetragon_url: "https://github.com/cilium/tetragon/releases/download/{{ cluster_tetragon_version }}/tetragon-{{ cluster_tetragon_version }}-{{ tetragon_arch }}.tar.gz"
+
+# One file per flag in /etc/tetragon/tetragon.conf.d (the agent reads its settings from there); cluster_tetragon_config wins.
+tetragon_config_base:
+  bpf-lib: "{{ tetragon_root }}/usr/local/lib/tetragon/bpf/"
+  # events: json lines, rotated by the agent itself (size and daily), compressed
+  export-filename: "{{ cluster_tetragon_log_dir }}/tetragon.log"
+  export-file-compress: "true"
+  export-file-max-size-mb: "{{ cluster_tetragon_log_max_size_mb }}"
+  export-file-max-backups: "{{ cluster_tetragon_log_max_backups }}"
+  export-file-rotation-interval: 24h
+  # credentials and namespaces in every process event (uid, caps, whether a process is in a container)
+  enable-process-cred: "true"
+  enable-process-ns: "true"
+  # the agent's own log
+  log-format: json
+  log-level: info
+  verbose: "0"
+  # prometheus metrics: the node's cluster address only (the firewall opens the port for the cluster)
+  metrics-server: "{{ cluster_ip }}:{{ cluster_tetragon_metrics_port }}"
+  # the grpc api (tetra) is a unix socket, root only; no health port, no gops
+  server-address: unix:///var/run/tetragon/tetragon.sock
+  health-server-address: 127.0.0.1:6789
+  gops-address: ""

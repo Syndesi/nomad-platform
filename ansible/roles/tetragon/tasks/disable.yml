@@ -1,0 +1,13 @@
+---
+# cluster_tetragon_enabled: false - stops and disables the service if it was ever installed (files stay)
+- name: Is there a tetragon service?
+  ansible.builtin.stat:
+    path: "{{ '/etc/systemd/system/tetragon.service' if ansible_facts['os_family'] == 'Debian' else '/etc/init.d/tetragon' }}"
+  register: tetragon_service_file
+
+- name: Stopped and disabled
+  ansible.builtin.service:
+    name: tetragon
+    enabled: false
+    state: stopped
+  when: tetragon_service_file.stat.exists

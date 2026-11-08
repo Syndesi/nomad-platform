@@ -296,6 +296,28 @@ authelia_internal_access_rules: >-
 # (tofu-nomad), optionally a Consul policy + token (tofu-consul, only with consul_rules). Devices: `task project:vpn`, hand-over: `task project:export`.
 cluster_projects: {}
 
+# ---- tetragon: eBPF runtime security on every node (docs/reference.md, "Runtime security") ---------------------------------------
+# A host service (the static release of the agent, the same files on Alpine and Ubuntu). It needs a kernel with BTF and cgroup v2; a node without
+# is skipped with a message. By default it only observes: process_exec / process_exit events with the container and image, as json lines in
+# cluster_tetragon_log_dir/tetragon.log (rotated by size and daily by the agent), metrics for prometheus on the node's cluster address.
+# Policies that watch or enforce more: cluster_tetragon_presets (shipped, see docs/reference.md) and the cluster repo's tetragon.d/*.yaml.
+cluster_tetragon_enabled: true
+cluster_tetragon_version: v1.8.0
+# sha256 of tetragon-<version>-<arch>.tar.gz (the .sha256sum assets of the release); change them with the version
+cluster_tetragon_sha256:
+  amd64: e88691c5f05a2a61aba58974a080603050b924c7f13ecc06f3d05172feb05f59
+  arm64: f894ff7fc0fe1d7c778bee183fd6710b4b70fc3269ce06994e8637c485c1f2af
+cluster_tetragon_metrics_port: 2112
+cluster_tetragon_log_dir: /var/log/tetragon
+cluster_tetragon_log_max_size_mb: 50
+cluster_tetragon_log_max_backups: 7
+# shipped policies: network-connect (observe: tcp connections of container processes), block-metadata-service (ENFORCE: kills a container process that
+# connects to 169.254.169.254, the metadata service of cloud providers)
+cluster_tetragon_presets: []
+# extra settings: flag name -> value, one file each in /etc/tetragon/tetragon.conf.d (e.g. export-denylist, enable-cri)
+cluster_tetragon_config: {}
+cluster_tetragon_fragments_dir: "{{ cluster_dir }}/tetragon.d"
+
 # ---- step-ca: the always-online intermediate CA (job step-ca), reached only through the Consul service mesh ----
 cluster_stepca_enabled: true
 cluster_stepca_image: smallstep/step-ca:0.30.2

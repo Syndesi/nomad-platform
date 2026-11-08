@@ -1,0 +1,54 @@
+---
+# Tracing policies = yaml files in /etc/tetragon/tetragon.tp.d, loaded at start. Wanted: the presets named in cluster_tetragon_presets (role files/policies)
+# and the cluster repo's tetragon.d/*.yaml (jinja). Everything else in the directory is removed.
+- name: Presets exist
+  ansible.builtin.assert:
+    that: item in tetragon_available_presets
+    fail_msg: "tetragon preset {{ item }} does not exist (available: {{ tetragon_available_presets | join(', ') }})"
+    quiet: true
+  loop: "{{ cluster_tetragon_presets }}"
+  vars:
+    tetragon_available_presets: "{{ lookup('ansible.builtin.fileglob', role_path ~ '/files/policies/*.yaml', wantlist=true) | map('basename') | map('regex_replace', '\\.yaml$', '') | list }}"
+
+- name: Presets
+  ansible.builtin.copy:
+    src: "policies/{{ item }}.yaml"
+    dest: "/etc/tetragon/tetragon.tp.d/preset-{{ item }}.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ cluster_tetragon_presets }}"
+  register: tetragon_presets_result
+
+- name: The cluster's own policies
+  ansible.builtin.template:
+    src: "{{ item }}"
+    dest: "/etc/tetragon/tetragon.tp.d/cluster-{{ item | basename | regex_replace('\\.j2$', '') }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ lookup('ansible.builtin.fileglob', cluster_tetragon_fragments_dir ~ '/*.yaml*', wantlist=true) | sort }}"
+  loop_control:
+    label: "{{ item | basename }}"
+  register: tetragon_cluster_policies
+
+- name: Policy files that are not wanted any more
+  ansible.builtin.find:
+    paths: /etc/tetragon/tetragon.tp.d
+    excludes: >-
+      {{ (cluster_tetragon_presets | map('regex_replace', '^(.*)$', 'preset-\1.yaml') | list)
+         + (tetragon_cluster_policies.results | map(attribute='dest') | map('basename') | list) }}
+  register: tetragon_stale_policies
+
+- name: ... removed
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ tetragon_stale_policies.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: tetragon_stale_policies_removed
+
+- name: Policies changed
+  ansible.builtin.set_fact:
+    tetragon_policies_changed: "{{ tetragon_presets_result is changed or tetragon_cluster_policies is changed or tetragon_stale_policies_removed is changed }}"

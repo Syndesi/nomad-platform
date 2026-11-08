@@ -325,6 +325,11 @@
         name: cluster_firewall
         tasks_from: "{{ 'main' if cluster_firewall_enabled | bool else 'disable' }}"
 
+    - name: Runtime security (tetragon)
+      ansible.builtin.include_role:
+        name: tetragon
+        tasks_from: "{{ 'main' if cluster_tetragon_enabled | bool else 'disable' }}"
+
     - name: Certificates (key + CSR on the node, signed here)
       ansible.builtin.include_role:
         name: cluster_tls

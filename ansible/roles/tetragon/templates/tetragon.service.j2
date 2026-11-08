@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Tetragon eBPF-based security observability and runtime enforcement
+Documentation=https://tetragon.io/
+DefaultDependencies=no
+After=network.target local-fs.target
+# not restarted for ever when it cannot start (systemctl reset-failed tetragon)
+StartLimitBurst=10
+StartLimitIntervalSec=2min
+
+[Service]
+Environment="PATH={{ tetragon_root }}/usr/local/lib/tetragon:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+User=root
+Group=root
+ExecStart={{ tetragon_root }}/usr/local/bin/tetragon
+RuntimeDirectory=tetragon
+RuntimeDirectoryPreserve=yes
+# bpf maps are locked memory
+LimitMEMLOCK=infinity
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
