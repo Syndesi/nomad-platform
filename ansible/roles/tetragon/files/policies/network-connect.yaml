@@ -1,6 +1,6 @@
 ---
 # Observe: every tcp connection that a process in a container opens (event process_kprobe, function tcp_connect: source and destination address).
-# Processes of the host itself are left out (namespace filter). Not an enforcement, nothing is killed.
+# Processes of the host itself and connections to loopback (sidecars talking to their app) are left out. Not an enforcement, nothing is killed.
 apiVersion: cilium.io/v1alpha1
 kind: TracingPolicy
 metadata:
@@ -18,3 +18,8 @@ spec:
               operator: NotIn
               values:
                 - host_ns
+          matchArgs:
+            - index: 0
+              operator: NotDAddr
+              values:
+                - 127.0.0.0/8

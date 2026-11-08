@@ -103,6 +103,15 @@
         dest: /usr/local/bin/tetra
         state: link
 
+    - name: The numeric id of the ansible user (its events carry it as auid)
+      ansible.builtin.command: "id -u {{ cluster_ansible_user }}"
+      register: tetragon_id
+      changed_when: false
+
+    - name: ... as a fact
+      ansible.builtin.set_fact:
+        tetragon_ansible_uid: "{{ tetragon_id.stdout | trim }}"
+
     - name: Directories
       ansible.builtin.file:
         path: "{{ item.path }}"

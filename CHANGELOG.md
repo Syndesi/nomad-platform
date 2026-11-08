@@ -21,7 +21,7 @@ Notable changes per version. Older history is in git.
   `pid_mode = "host"` stay refused, runtimes are not restricted (nvidia works).
 - **Tetragon** (role `tetragon`, `docs/reference.md` "Runtime security"): eBPF runtime security on every node, from the pinned static release (same files on Alpine and
   Ubuntu). Json event log, Prometheus metrics on the node's cluster address (port 2112, firewall: cluster subnets), shipped policy presets
-  (`cluster_tetragon_presets`: `network-connect`, `block-metadata-service` which enforces) and the cluster repo's `tetragon.d/*.yaml`. Off with `cluster_tetragon_enabled: false`.
+  (`cluster_tetragon_presets`: `network-connect`, `block-metadata-service` which enforces); quiet filters on by default (`cluster_tetragon_quiet_runtime|quiet_deploys|slim_events`: container plumbing, the ansible user's deploys except sudo, capability/namespace fields), no `binary` metric label and the cluster repo's `tetragon.d/*.yaml`. Off with `cluster_tetragon_enabled: false`.
 - Tools image: `util-linux-misc` (`column`), used by `task projects` and `task vpn:list`.
 - `scripts/vpn.sh client` also writes `connect.sh` / `disconnect.sh` (VPN up and down without installing: wstunnel + wireguard + /etc/hosts, for CI runners).
 - Docs: `task tokens` lists accessor ids (the reference said it printed the tokens).

@@ -314,6 +314,16 @@ cluster_tetragon_log_max_backups: 7
 # shipped policies: network-connect (observe: tcp connections of container processes), block-metadata-service (ENFORCE: kills a container process that
 # connects to 169.254.169.254, the metadata service of cloud providers)
 cluster_tetragon_presets: []
+# less noise in the event log (all of them can be switched off):
+#   quiet_runtime - runc / containerd-shim / docker-init events (container plumbing, three or four per container start)
+#   quiet_deploys - events of the ansible user (a deploy starts thousands of processes) except its sudo / doas calls. The account is root equivalent:
+#                   what it does is only visible as the sudo command lines, not as the processes behind them. false = everything
+#   slim_events   - capability sets and namespace ids are left out of exec / exit events (80 % of their size)
+cluster_tetragon_quiet_runtime: true
+cluster_tetragon_quiet_deploys: true
+cluster_tetragon_slim_events: true
+# more export filters (json objects, deny list), e.g. '{"binary_regex":["/healthcheck.sh$"]}'
+cluster_tetragon_export_denylist: []
 # extra settings: flag name -> value, one file each in /etc/tetragon/tetragon.conf.d (e.g. export-denylist, enable-cri)
 cluster_tetragon_config: {}
 cluster_tetragon_fragments_dir: "{{ cluster_dir }}/tetragon.d"

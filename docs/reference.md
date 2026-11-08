@@ -216,13 +216,22 @@ stops the service.
 |---|---|
 | Events, one json object per line | `cluster_tetragon_log_dir/tetragon.log` (default `/var/log/tetragon`, root only). The agent rotates by size (`cluster_tetragon_log_max_size_mb`) and daily, keeps `cluster_tetragon_log_max_backups` gzipped files. Meant for promtail / Alloy / Loki |
 | The agent's own log | json; Ubuntu: journal (`journalctl -u tetragon`), Alpine: `agent.log` in the same directory (logrotate, `cluster_log_retention_days`) |
-| Prometheus metrics | `http://<node cluster address>:2112/metrics` (`cluster_tetragon_metrics_port`), reachable from the cluster subnets only (host firewall). Scrape every node; the agent also exposes `tetragon_events_total` per binary and event type |
+| Prometheus metrics | `http://<node cluster address>:2112/metrics` (`cluster_tetragon_metrics_port`), reachable from the cluster subnets only (host firewall). Scrape every node; the agent also exposes `tetragon_events_total` per binary and event type. About 2,250 series per node, 1,800 of them two always-on health families (`tetragon_handling_latency_*`, `tetragon_handler_errors_total`, one series per internal opcode and bucket, nearly all zero) that this Tetragon version cannot switch off: the scraper should drop `tetragon_handling_latency*`, `tetragon_handler_errors_total`, `tetragon_msg_op_total`, `tetragon_data_event_size*`, `tetragon_event_cache_*`, `go_*` (about 100 series remain: lost events, ring buffer, exported events, process cache, policies). The label `binary` is switched off (`metrics-label-filter`: one series per executable ever started). Container metrics are Nomad's job |
 | Health | `127.0.0.1:6789` (node only) |
 | Command line | `tetra` on the node as root (`tetra getevents -o compact`, `tetra tracingpolicy list`); the gRPC socket is `/var/run/tetragon/tetragon.sock` |
 
-By default the agent only **observes**: process_exec / process_exit of everything on the node (host and containers, with uid, capabilities, namespaces and
-the container id). That is a lot on a busy node (the deploy itself starts thousands of processes): filter with `cluster_tetragon_config`
-(`export-denylist` / `export-allowlist`, one json filter per line).
+By default the agent only **observes**: process_exec / process_exit of everything on the node (host and containers, with uid and the container id).
+Left alone that is a lot (the deploy itself starts thousands of processes, every container start four plumbing events, every event 5 KB), so three
+filters are on (measured on the test cluster: an idle node writes about a tenth of the bytes):
+
+| Variable | Drops |
+|---|---|
+| `cluster_tetragon_quiet_runtime` | events of runc, containerd-shim, docker-init (container start plumbing); the container's own first process stays |
+| `cluster_tetragon_quiet_deploys` | everything the ansible user starts, except its `sudo` / `doas` calls (the record of what ran as root). **Blind spot:** the account is root equivalent; its processes are not visible, only the command lines it handed to sudo. `false` = log all of it |
+| `cluster_tetragon_slim_events` | capability sets and namespace ids in exec / exit events (80 % of an event's size) |
+
+More: `cluster_tetragon_export_denylist` (json filter objects, e.g. `'{"binary_regex":["/healthcheck.sh$"]}'`). What is left on an idle node is mostly
+what runs in your containers (health check scripts): filter those by binary there.
 
 **Policies** (TracingPolicy yaml, loaded at start from `/etc/tetragon/tetragon.tp.d`):
 

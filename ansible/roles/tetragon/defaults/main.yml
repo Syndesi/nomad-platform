@@ -5,6 +5,25 @@ tetragon_cache_dir: /var/cache/cluster-tetragon
 tetragon_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] | default('') }}"
 tetragon_url: "https://github.com/cilium/tetragon/releases/download/{{ cluster_tetragon_version }}/tetragon-{{ cluster_tetragon_version }}-{{ tetragon_arch }}.tar.gz"
 
+# Filters of the export (one json object per line, tetragon.io/docs/concepts/events/#filters). All of them are OR-ed, the fields of one are AND-ed.
+tetragon_denylist: >-
+  {{ (tetragon_plumbing_filters if cluster_tetragon_quiet_runtime else [])
+     + (tetragon_ansible_filters if cluster_tetragon_quiet_deploys else [])
+     + cluster_tetragon_export_denylist }}
+# runc, the shim and docker-init start every container: three or four events per start, without information the container's own first process does not carry
+tetragon_plumbing_filters:
+  - '{"binary_regex":["/runc$","/containerd-shim-runc-v2$","/docker-init$","^/proc/self/fd/"]}'
+# what the ansible user does (a deploy starts thousands of processes): everything but the sudo / doas calls themselves, which stay as the record of what ran as root
+tetragon_ansible_filters:
+  - >-
+    {{ {'event_set': ['PROCESS_EXEC'], 'cel_expression': ['process_exec.process.auid == ' ~ tetragon_ansible_uid ~ 'u && !process_exec.process.binary.endsWith("/sudo") && !process_exec.process.binary.endsWith("/doas")']} | to_json }}
+  - >-
+    {{ {'event_set': ['PROCESS_EXIT'], 'cel_expression': ['process_exit.process.auid == ' ~ tetragon_ansible_uid ~ 'u']} | to_json }}
+# capability sets and namespace ids are 80 % of an exec event and the same for almost every process: left out (the container id and the uid stay)
+tetragon_field_filters: >-
+  {{ ['{"event_set":["PROCESS_EXEC","PROCESS_EXIT"],"fields":"process.cap,process.ns,parent.cap,parent.ns,process.process_credentials,parent.process_credentials","action":"EXCLUDE"}']
+     if cluster_tetragon_slim_events | bool else [] }}
+
 # One file per flag in /etc/tetragon/tetragon.conf.d (the agent reads its settings from there); cluster_tetragon_config wins.
 tetragon_config_base:
   bpf-lib: "{{ tetragon_root }}/usr/local/lib/tetragon/bpf/"
@@ -14,9 +33,11 @@ tetragon_config_base:
   export-file-max-size-mb: "{{ cluster_tetragon_log_max_size_mb }}"
   export-file-max-backups: "{{ cluster_tetragon_log_max_backups }}"
   export-file-rotation-interval: 24h
-  # credentials and namespaces in every process event (uid, caps, whether a process is in a container)
-  enable-process-cred: "true"
-  enable-process-ns: "true"
+  # which events are not written (cluster_tetragon_quiet_*, cluster_tetragon_export_denylist) and which fields are left out of the rest
+  export-denylist: "{{ tetragon_denylist | join('\n') }}"
+  field-filters: "{{ tetragon_field_filters | join('\n') }}"
+  # event metrics without the label `binary` (one series per executable ever started); namespace / workload / pod stay empty without kubernetes
+  metrics-label-filter: namespace,workload,pod
   # the agent's own log
   log-format: json
   log-level: info
