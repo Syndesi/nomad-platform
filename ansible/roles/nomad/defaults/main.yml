@@ -9,8 +9,9 @@ nomad_interface: "{{ cluster_interface_effective }}"
 # docker capabilities jobs may add, beyond nomad_docker_default_caps: the vpn sidecars of traefik (wireguard, dnsmasq, nftables) need net_admin (ingress nodes only)
 nomad_docker_extra_caps: "{{ ['net_admin'] if inventory_hostname in groups['cluster_ingress'] | default([]) else [] }}"
 # /v1/metrics answers WITHOUT a token (nomad does not ACL-protect it) and every container reaches the api port. Allocation and node metrics name
-# jobs, tasks and their resource use: off by default, only the agent's own runtime metrics remain. A scraper that needs them: true.
-nomad_publish_workload_metrics: false
+# jobs, tasks and their resource use: off without the monitoring stack (only the agent's own runtime metrics remain), on with it (cluster_monitoring_enabled:
+# the container metrics of the dashboards come from here). The price: any container that reaches the api port of a node can read them.
+nomad_publish_workload_metrics: "{{ cluster_monitoring_enabled | bool }}"
 # Task drivers that do not fingerprint on the clients, so no job can use them. Remove a name only if you run jobs with that driver (and
 # then accept that its tasks are outside the container firewall).
 nomad_driver_denylist: [mock_driver, exec, java, qemu]
@@ -31,11 +32,24 @@ nomad_authelia_enabled: "{{ nomad_is_client and inventory_hostname in cluster_au
 # step-ca runs on the node in cluster_stepca_hosts (client meta stepca = true, the host volume with its database)
 nomad_stepca_enabled: "{{ cluster_stepca_enabled | bool and nomad_is_client and inventory_hostname in cluster_stepca_hosts }}"
 
+# The monitoring server (Loki, Prometheus, ..., ntfy) runs on cluster_monitoring_node (client meta monitoring = true, the volumes below)
+nomad_monitoring_enabled: "{{ cluster_monitoring_enabled | bool and nomad_is_client and inventory_hostname == cluster_monitoring_node }}"
+# the host volumes of the server: the folders belong to the user the image runs as
+nomad_monitoring_volumes:
+  - { name: monitoring-postgres, path: "{{ cluster_monitoring_dir }}/postgres", read_only: false, owner: "70", mode: "0700" }
+  - { name: monitoring-loki, path: "{{ cluster_monitoring_dir }}/loki", read_only: false, owner: "10001", mode: "0700" }
+  - { name: monitoring-prometheus, path: "{{ cluster_monitoring_dir }}/prometheus", read_only: false, owner: "65534", mode: "0700" }
+  - { name: monitoring-alertmanager, path: "{{ cluster_monitoring_dir }}/alertmanager", read_only: false, owner: "65534", mode: "0700" }
+  - { name: monitoring-grafana, path: "{{ cluster_monitoring_dir }}/grafana", read_only: false, owner: "472", mode: "0700" }
+  - { name: monitoring-gatus, path: "{{ cluster_monitoring_dir }}/gatus", read_only: false, owner: "65534", mode: "0700" }
+  - { name: monitoring-ntfy, path: "{{ cluster_monitoring_dir }}/ntfy", read_only: false, owner: "65534", mode: "0700" }
+
 # Client meta + host volumes. Nodes in group cluster_ingress may run traefik.
 nomad_client_meta: >-
   {{ ({'traefik': 'true'} if inventory_hostname in groups['cluster_ingress'] | default([]) else {})
      | combine({'authelia': 'true'} if nomad_authelia_enabled | bool else {})
-     | combine({'stepca': 'true'} if nomad_stepca_enabled | bool else {}) }}
+     | combine({'stepca': 'true'} if nomad_stepca_enabled | bool else {})
+     | combine({'monitoring': 'true'} if nomad_monitoring_enabled | bool else {}) }}
 nomad_host_volumes_dir: "{{ nomad_data_dir }}/volumes"
 # All host volumes of this node as {name, path, read_only}: the platform's (traefik's data on ingress nodes) plus the
 # cluster's own (cluster_host_volumes, per node or group in the cluster repo's inventory).
@@ -48,4 +62,9 @@ nomad_host_volumes: >-
          {'name': 'internal-tls', 'path': cluster_internal_tls_dir, 'read_only': true}]
         if inventory_hostname in groups['cluster_ingress'] | default([]) else [])
      + ([{'name': 'step-ca', 'path': cluster_stepca_dir, 'read_only': false}] if nomad_stepca_enabled | bool else [])
+     + (nomad_monitoring_volumes if nomad_monitoring_enabled | bool else [])
+     + ([{'name': 'monitoring-vector', 'path': cluster_monitoring_dir ~ '/vector', 'read_only': false},
+         {'name': 'monitoring-docker-sock', 'path': '/var/run/docker.sock', 'read_only': true, 'external': true}]
+        + ([{'name': 'monitoring-tetragon-log', 'path': cluster_tetragon_log_dir, 'read_only': true, 'external': true}] if cluster_tetragon_enabled | bool else [])
+        if cluster_monitoring_enabled | bool and nomad_is_client else [])
      + (cluster_host_volumes | default([])) }}

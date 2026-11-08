@@ -235,7 +235,7 @@ what runs in your containers (health check scripts): filter those by binary ther
 
 **Policies** (TracingPolicy yaml, loaded at start from `/etc/tetragon/tetragon.tp.d`):
 
-- `cluster_tetragon_presets`, shipped with the platform (none by default):
+- `cluster_tetragon_presets`, shipped with the platform (default: `block-metadata-service`):
   - `network-connect` - observe: tcp connections of container processes.
   - `block-metadata-service` - **enforce**: a container process that connects to 169.254.169.254 is killed with SIGKILL before the connection is made.
 - the cluster repo's own: `tetragon.d/*.yaml` (jinja allowed; `.yaml.j2` too). Removing a file removes the policy. A policy with `matchActions: Sigkill`
@@ -251,7 +251,7 @@ a clean error. It does not replace the network rules of the host firewall or the
 ## Backup and restore
 
 `task backup` writes `backups/<cluster>-<time>/`: Nomad and Consul snapshots, the tofu states, the authelia database of each node that has
-one (an SQL dump made by `sqlite3` in a throwaway container on the node, image `cluster_sqlite_image`, replayed by `task restore`) and traefik's `acme.json` (public ACME CAs), all age-encrypted to the recipients of `.sops.yaml` (newest `BACKUP_KEEP`, default 10).
+one (an SQL dump made by `sqlite3` in a throwaway container on the node, image `cluster_sqlite_image`, replayed by `task restore`), the database of Grafana (`pg_dump` in the running postgres of the monitoring stack, replayed by `task restore`; the logs and metrics are not backed up) and traefik's `acme.json` (public ACME CAs), all age-encrypted to the recipients of `.sops.yaml` (newest `BACKUP_KEEP`, default 10).
 Application data is not part of it. Copy the folder off the machine, together with the age private key (`secrets/age/keys.txt`): without
 the key the backups and every secret are lost.
 
@@ -277,6 +277,12 @@ The restore refuses a cluster that already has workloads. Drilled on Incus VMs; 
 | `compose.override.yml`, `Taskfile.yml` | extra mounts for the tools container, extra tasks |
 
 Do not edit anything below `base/`: change the platform in its own repo and move the pointer with `task upgrade`.
+
+## Monitoring
+
+Logs, metrics, alerts and a status page on every cluster by default: `docs/monitoring.md` (architecture, collected data, custom metric endpoints with Consul tags,
+retention, a primer on what Alertmanager needs). Variables: `cluster_monitoring_enabled`, `cluster_monitoring_node` (default: the server node, if it is a client),
+`cluster_monitoring_retention_days` (45), `cluster_monitoring_dir`, the `*_image` tags, `cluster_monitoring_extra_rules`, `cluster_monitoring_oidc_enabled` (off, see the document).
 
 ## Open ideas (not implemented)
 

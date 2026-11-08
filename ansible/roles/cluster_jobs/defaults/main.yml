@@ -13,7 +13,10 @@ cluster_jobs_env:
 cluster_jobs_tls_resolver: "{{ '' if cluster_acme_ca == 'internal' else 'le' }}"
 
 # the jobs of this cluster (step-ca only when it is enabled)
-cluster_jobs_active: "{{ cluster_jobs_list if cluster_stepca_enabled | bool else cluster_jobs_list | rejectattr('name', 'eq', 'step-ca') | list }}"
+cluster_jobs_active: >-
+  {{ cluster_jobs_list
+     | rejectattr('name', 'in', ([] if cluster_stepca_enabled | bool else ['step-ca']) + ([] if cluster_monitoring_enabled | bool else ['ntfy', 'monitoring-server', 'monitoring-agent']))
+     | list }}
 
 cluster_jobs_common_vars:
   datacenter: "{{ cluster_datacenter }}"
@@ -75,8 +78,45 @@ cluster_jobs_list:
       wireguard_image: "{{ cluster_wireguard_image }}"
       wireguard_bypass: "{{ cluster_wireguard_bypass }}"
       metrics_port: "{{ cluster_traefik_metrics_port if cluster_traefik_metrics | bool else 0 }}"
+      grafana_addr: "{{ hostvars[cluster_monitoring_node].cluster_ip ~ ':' ~ cluster_monitoring_grafana_port if cluster_monitoring_enabled | bool else '' }}"
+      gatus_addr: "{{ hostvars[cluster_monitoring_node].cluster_ip ~ ':' ~ cluster_monitoring_gatus_port if cluster_monitoring_enabled | bool else '' }}"
       acme_server: "{{ cluster_acme_server }}"
       acme_email: "{{ cluster_acme_email }}"
+  # the monitoring stack (cluster_monitoring_enabled): ntfy first (alerts go there), the server (Loki / Prometheus), then the agents that write to it
+  - name: ntfy
+    vars:
+      image: "{{ cluster_monitoring_ntfy_image }}"
+      port: "{{ cluster_monitoring_ntfy_port }}"
+      topic: "{{ cluster_monitoring_ntfy_topic }}"
+  - name: monitoring-server
+    vars:
+      zone: "{{ cluster_internal_zone }}"
+      cluster_domain: "{{ cluster_domain }}"
+      cluster_name: "{{ cluster_monitoring_title }}"
+      retention_days: "{{ cluster_monitoring_retention_days }}"
+      postgres_image: "{{ cluster_monitoring_postgres_image }}"
+      loki_image: "{{ cluster_monitoring_loki_image }}"
+      prometheus_image: "{{ cluster_monitoring_prometheus_image }}"
+      alertmanager_image: "{{ cluster_monitoring_alertmanager_image }}"
+      grafana_image: "{{ cluster_monitoring_grafana_image }}"
+      gatus_image: "{{ cluster_monitoring_gatus_image }}"
+      grafana_port: "{{ cluster_monitoring_grafana_port }}"
+      gatus_port: "{{ cluster_monitoring_gatus_port }}"
+      ingress_addr: "{{ hostvars[groups['cluster_ingress'][0]].cluster_ip }}"
+      authelia_internal_addr: "{{ hostvars[cluster_authelia_hosts[0]].cluster_ip }}:{{ cluster_authelia_internal_port }}"
+      ntfy_addr: "{{ hostvars[cluster_monitoring_node].cluster_ip }}:{{ cluster_monitoring_ntfy_port }}"
+      ntfy_topic: "{{ cluster_monitoring_ntfy_topic }}"
+      oidc: "{{ cluster_monitoring_oidc_enabled | bool }}"
+      extra_rules: "{{ ({'groups': cluster_monitoring_extra_rules} | to_json) if cluster_monitoring_extra_rules else '' }}"
+  - name: monitoring-agent
+    templates: true
+    vars:
+      templates_dir: "{{ cluster_jobs_remote_dir }}/monitoring-agent"
+      image: "{{ cluster_monitoring_vector_image }}"
+      nomad_port: "{{ cluster_nomad_http_port }}"
+      consul_port: "{{ cluster_consul_https_port }}"
+      tetragon_port: "{{ cluster_tetragon_metrics_port if cluster_tetragon_enabled | bool else 0 }}"
+      tetragon_log: "{{ cluster_tetragon_enabled | bool }}"
 
 # authelia login regulation (per username): this many failures within find_time ban the user for ban_time
 authelia_regulation_max_retries: 5
@@ -91,7 +131,7 @@ cluster_jobs_authelia_instances:
     port: 9091
     domain: "{{ cluster_domain }}"
     issuer: "{{ authelia_totp_issuer }}"
-    rules: "{{ authelia_access_rules }}"
+    rules: "{{ authelia_platform_public_rules + authelia_access_rules }}"
     session_secret: "{{ cluster_authelia_session_secret }}"
     storage_key: "{{ cluster_authelia_storage_encryption_key }}"
     jwt_secret: "{{ cluster_authelia_reset_password_jwt_secret }}"
@@ -107,3 +147,8 @@ cluster_jobs_authelia_instances:
     jwt_secret: "{{ cluster_authelia_internal_reset_password_jwt_secret }}"
     totp_seeds: "{{ authelia_internal_totp_seeds | default({}) }}"
     var_prefix: authelia_internal
+    # the OpenID Connect provider (off by default, see cluster_monitoring_oidc_enabled): Grafana logs in with the accounts of authelia-internal (clients: id, secret hash, redirect uri)
+    oidc: "{{ {'hmac_secret': cluster_authelia_internal_oidc_hmac_secret,
+               'jwks_key': cluster_authelia_internal_oidc_jwks_key,
+               'clients': [{'id': 'grafana', 'name': 'Grafana', 'secret_hash': cluster_monitoring_oidc_client_secret_hash,
+                            'redirect_uris': ['https://grafana.' ~ cluster_internal_zone ~ '/login/generic_oauth']}]} if cluster_monitoring_enabled | bool and cluster_monitoring_oidc_enabled | bool else {} }}"

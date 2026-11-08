@@ -20,6 +20,40 @@ uuid()   { cat /proc/sys/kernel/random/uuid; }
 key()    { openssl rand -base64 32; }
 string() { openssl rand -hex 32; }
 
+
+# The secrets of the monitoring stack and the hashes that go with them (printed as one json object; docs/monitoring.md). The hashes are made here, once:
+# authelia's pbkdf2 and ntfy's bcrypt are not available as ansible filters in the tools container.
+monitoring_json() {
+  python3 - <<'MONEND'
+import base64, hashlib, json, secrets, string, subprocess
+import bcrypt
+
+def ab64(b): return base64.b64encode(b).decode().rstrip("=").replace("+", ".")
+def pbkdf2(pw, rounds=310000):
+    salt = secrets.token_bytes(16)
+    return "$pbkdf2-sha512$%d$%s$%s" % (rounds, ab64(salt), ab64(hashlib.pbkdf2_hmac("sha512", pw.encode(), salt, rounds, 64)))
+def bc(pw): return bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode().replace("$2b$", "$2a$")
+def rnd(n): return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(n))
+
+oidc = secrets.token_hex(24)
+ntfy_admin = rnd(24)
+out = {
+    "cluster_monitoring_postgres_password": rnd(32),
+    "cluster_monitoring_grafana_secret_key": secrets.token_hex(32),
+    "cluster_monitoring_grafana_admin_password": rnd(24),
+    "cluster_monitoring_oidc_client_secret": oidc,
+    "cluster_monitoring_oidc_client_secret_hash": pbkdf2(oidc),
+    "cluster_authelia_internal_oidc_hmac_secret": secrets.token_hex(32),
+    "cluster_authelia_internal_oidc_jwks_key": subprocess.run(["openssl", "genrsa", "4096"], capture_output=True, check=True, text=True).stdout,
+    "cluster_monitoring_ntfy_admin_password": ntfy_admin,
+    "cluster_monitoring_ntfy_admin_hash": bc(ntfy_admin),
+    "cluster_monitoring_ntfy_alertmanager_hash": bc(rnd(40)),
+    "cluster_monitoring_ntfy_alertmanager_token": "tk_" + "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(29)),
+}
+print(json.dumps(out))
+MONEND
+}
+
 case "${1:-}" in
   init)
     if [ -e "$FILE" ]; then echo "$FILE exists - refusing to overwrite" >&2; exit 1; fi
@@ -47,6 +81,8 @@ cluster_authelia_reset_password_jwt_secret: "$(string)"
 cluster_authelia_internal_session_secret: "$(string)"
 cluster_authelia_internal_storage_encryption_key: "$(string)"
 cluster_authelia_internal_reset_password_jwt_secret: "$(string)"
+# Monitoring (docs/monitoring.md): database, Grafana, the OIDC client of Grafana at authelia-internal, ntfy
+$(monitoring_json | python3 -c 'import sys,json; [print("%s: %s" % (k, json.dumps(v))) for k, v in json.load(sys.stdin).items()]')
 YAML
     mv "$FILE.new" "$FILE"
     echo "written $FILE (encrypted)"
@@ -57,6 +93,15 @@ YAML
     for k in cluster_authelia_internal_session_secret cluster_authelia_internal_storage_encryption_key cluster_authelia_internal_reset_password_jwt_secret; do
       if ! sops --decrypt --extract "[\"$k\"]" "$FILE" >/dev/null 2>&1; then
         sops set "$FILE" "[\"$k\"]" "\"$(string)\""
+        echo "added $k"
+      fi
+    done
+
+    # the monitoring stack (and the OIDC provider of authelia-internal that Grafana logs in with)
+    mon=$(monitoring_json)
+    for k in $(printf '%s' "$mon" | python3 -c 'import sys,json; print(" ".join(json.load(sys.stdin)))'); do
+      if ! sops --decrypt --extract "[\"$k\"]" "$FILE" >/dev/null 2>&1; then
+        sops set "$FILE" "[\"$k\"]" "$(printf '%s' "$mon" | K="$k" python3 -c 'import sys,json,os; print(json.dumps(json.load(sys.stdin)[os.environ["K"]]))')"
         echo "added $k"
       fi
     done

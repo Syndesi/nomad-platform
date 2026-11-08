@@ -85,3 +85,69 @@
   loop_control:
     loop_var: cluster_jobs_item
     label: "{{ cluster_jobs_item.name }}"
+
+# Grafana's database from the backup (task restore): the stack is up and has made empty tables; the dump drops and recreates them (pg_dump --clean).
+# A backup without it is not an error: the dashboards are gone, everything else is as before.
+- name: Grafana's database from the backup (task restore)
+  when: cluster_restore_dir | length > 0 and cluster_monitoring_enabled | bool
+  block:
+    - name: The backup has it
+      ansible.builtin.stat:
+        path: "{{ cluster_restore_dir }}/grafana-db.sql.age"
+      delegate_to: localhost
+      become: false
+      register: cluster_jobs_grafana_dump
+
+    - name: Replay it
+      when: cluster_jobs_grafana_dump.stat.exists
+      block:
+        - name: Decrypt on the controller (tmpfs)
+          ansible.builtin.shell: >-
+            set -o pipefail; umask 077;
+            age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/grafana-db.sql.age') | quote }}
+            > {{ (cluster_run_dir ~ '/restore-grafana-db.sql') | quote }}
+          args:
+            executable: /bin/bash
+          delegate_to: localhost
+          become: false
+          changed_when: false
+
+        - name: Copy to the monitoring node
+          ansible.builtin.copy:
+            src: "{{ cluster_run_dir }}/restore-grafana-db.sql"
+            dest: /root/restore-grafana-db.sql
+            mode: "0600"
+          delegate_to: "{{ cluster_monitoring_node }}"
+          become: true
+
+        - name: Postgres of the stack is running
+          ansible.builtin.shell: >-
+            docker ps -q --filter label=com.hashicorp.nomad.job_name=monitoring-server --filter label=com.hashicorp.nomad.task_name=postgres | head -1
+          register: cluster_jobs_pg
+          until: cluster_jobs_pg.stdout | length > 0
+          retries: 30
+          delay: 5
+          changed_when: false
+          delegate_to: "{{ cluster_monitoring_node }}"
+          become: true
+
+        - name: Replay the dump, then Grafana reads it
+          ansible.builtin.shell: |
+            set -e
+            docker exec -i {{ cluster_jobs_pg.stdout }} psql -v ON_ERROR_STOP=0 -q -U grafana grafana < /root/restore-grafana-db.sql >/dev/null
+            g=$(docker ps -q --filter label=com.hashicorp.nomad.job_name=monitoring-server --filter label=com.hashicorp.nomad.task_name=grafana | head -1)
+            [ -z "$g" ] || docker restart "$g" >/dev/null
+          changed_when: true
+          delegate_to: "{{ cluster_monitoring_node }}"
+          become: true
+
+      always:
+        - name: The decrypted dump is removed (controller and node)
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          delegate_to: "{{ item.host }}"
+          become: "{{ item.host != 'localhost' }}"
+          loop:
+            - { host: localhost, path: "{{ cluster_run_dir }}/restore-grafana-db.sql" }
+            - { host: "{{ cluster_monitoring_node }}", path: /root/restore-grafana-db.sql }

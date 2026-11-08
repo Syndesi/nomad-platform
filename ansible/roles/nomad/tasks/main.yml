@@ -17,21 +17,26 @@
       - LimitNOFILE=infinity
       - LimitNPROC=infinity
       - TasksMax=infinity
-      # a subset: nomad stays root and drives docker, cni, cgroups and mounts, so no filesystem or capability restrictions (systemd only)
+      # a subset: nomad stays root and drives docker, cni, cgroups and mounts, so no filesystem or capability restrictions (systemd only).
+      # NOT ProtectKernelModules / ProtectKernelLogs / ProtectClock (nor any other Protect*): they put the service in a private mount namespace, and
+      # the tmpfs that nomad mounts for the secrets of every task is then invisible to dockerd: the secrets directory of every container (templates
+      # in secrets/, the Envoy bootstrap of Connect sidecars) would be empty.
       - NoNewPrivileges=true
-      - ProtectKernelModules=true
-      - ProtectKernelLogs=true
-      - ProtectClock=true
       - RestrictRealtime=true
       - LockPersonality=true
       - SystemCallArchitectures=native
 
+# `external` volumes (the docker socket, tetragon's log directory) are made by someone else and keep their owner and mode
 - name: Data and host volume directories
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: directory
-    mode: "0755"
-  loop: "{{ [nomad_data_dir] + (nomad_host_volumes | map(attribute='path') | list) }}"
+    mode: "{{ item.mode | default('0755') }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.owner | default('root') }}"
+  loop: "{{ [{'path': nomad_data_dir}] + (nomad_host_volumes | rejectattr('external', 'defined') | list) }}"
+  loop_control:
+    label: "{{ item.path }}"
 
 # traefik's data (acme.json: a private key) belongs to the user traefik runs as (cluster_traefik_uid); recursive, so an acme.json made by an
 # earlier root-run traefik is handed over too

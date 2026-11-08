@@ -87,6 +87,15 @@ variable "vpn_wstunnel_user" {
   type    = string
   default = "65532"
 }
+# the monitoring server's web uis on the node of the server (host:port, cluster network); "" = no monitoring: no routers for grafana. and status.
+variable "grafana_addr" {
+  type    = string
+  default = ""
+}
+variable "gatus_addr" {
+  type    = string
+  default = ""
+}
 variable "vpn_admin_net" {
   type        = string
   description = "CIDR of the VPN addresses of people's devices: the only sources of the ops UIs (nomad., consul., traefik.<zone>)"
@@ -638,6 +647,8 @@ EOT
         TPL_ZONE                   = var.internal_zone
         TPL_VPN_HOST               = var.vpn_host
         TPL_VPN_PORT               = var.vpn_entrypoint_port
+        TPL_GRAFANA_ADDR           = var.grafana_addr
+        TPL_GATUS_ADDR             = var.gatus_addr
         TPL_VPN_ADMIN_NET          = var.vpn_admin_net
         TPL_VPN_PROJECT_NET        = var.vpn_project_net
         TPL_WSTUNNEL_PORT          = var.vpn_wstunnel_port

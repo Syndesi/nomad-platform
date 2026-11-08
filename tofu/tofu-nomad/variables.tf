@@ -67,6 +67,27 @@ variable "vpn_wg_conf" {
   sensitive   = true
 }
 
+variable "monitoring_consul_token" {
+  description = "The consul token of the monitoring agents (output of tofu-consul); empty = no monitoring"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "monitoring_server_items" {
+  description = "items of the nomad variable nomad/jobs/monitoring-server (postgres, grafana, oidc secrets, the token for ntfy); empty = no monitoring"
+  type        = map(string)
+  sensitive   = true
+  default     = {}
+}
+
+variable "ntfy_items" {
+  description = "items of the nomad variable nomad/jobs/ntfy (password hashes, token); empty = no monitoring"
+  type        = map(string)
+  sensitive   = true
+  default     = {}
+}
+
 variable "task_kv_prefixes" {
   description = "Consul KV prefixes that nomad tasks (workload identity) may read; empty = no KV access"
   type        = list(string)

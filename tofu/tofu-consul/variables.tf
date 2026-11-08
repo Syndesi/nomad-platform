@@ -32,6 +32,12 @@ variable "stepca_enabled" {
   default     = false
 }
 
+variable "monitoring_enabled" {
+  description = "the monitoring stack runs: the intentions that let only the agents' service reach Loki and Prometheus"
+  type        = bool
+  default     = false
+}
+
 variable "projects" {
   description = "Projects (docs/projects.md): only those with consul_rules get a consul policy and token"
   type = map(object({

@@ -18,6 +18,17 @@
       datacenter: "{{ cluster_datacenter }}"
       task_kv_prefixes: "{{ cluster_consul_task_kv_prefixes }}"
       projects: "{{ cluster_projects }}"
+      monitoring_consul_token: "{{ cluster_consul_out.service_tokens.monitoring if cluster_monitoring_enabled | bool else '' }}"
+      monitoring_server_items: >-
+        {{ {'postgres_password': cluster_monitoring_postgres_password,
+            'grafana_secret_key': cluster_monitoring_grafana_secret_key,
+            'grafana_admin_password': cluster_monitoring_grafana_admin_password,
+            'oidc_client_secret': cluster_monitoring_oidc_client_secret,
+            'ntfy_token': cluster_monitoring_ntfy_alertmanager_token} if cluster_monitoring_enabled | bool else {} }}
+      ntfy_items: >-
+        {{ {'admin_hash': cluster_monitoring_ntfy_admin_hash,
+            'alertmanager_hash': cluster_monitoring_ntfy_alertmanager_hash,
+            'alertmanager_token': cluster_monitoring_ntfy_alertmanager_token} if cluster_monitoring_enabled | bool else {} }}
       traefik_consul_token: "{{ cluster_consul_out.service_tokens.traefik }}"
       authelia_configuration: "{{ lookup('ansible.builtin.template', 'authelia-configuration.yml.j2', template_vars={'authelia_inst': cluster_jobs_authelia_instances[0]}) }}"
       authelia_users: "{{ lookup('ansible.builtin.template', 'authelia-users.yml.j2') }}"

@@ -35,5 +35,6 @@ cluster_firewall_public_tcp_ports: "{{ [80, 443] if inventory_hostname in groups
 # need: add them here.
 # Where containers WITHOUT internet access may connect to: the cluster and the container networks (the network "egress" is not restricted)
 cluster_firewall_container_destinations: "{{ cluster_firewall_cluster_sources + [cluster_docker_bridge_subnet, cluster_nomad_bridge_subnet, cluster_egress_bridge_subnet] }}"
-cluster_firewall_bridge_tcp_ports: "{{ [53, cluster_nomad_http_port, cluster_consul_https_port] }}"
+# the monitoring agent (a container) scrapes the node: nomad, consul and tetragon's metrics port
+cluster_firewall_bridge_tcp_ports: "{{ [53, cluster_nomad_http_port, cluster_consul_https_port] + ([cluster_tetragon_metrics_port] if cluster_monitoring_enabled | bool and cluster_tetragon_enabled | bool else []) }}"
 cluster_firewall_bridge_udp_ports: [53]

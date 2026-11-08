@@ -33,6 +33,14 @@ if [ "$stepca" = True ] || [ "$stepca" = true ]; then
   check "nomad: step-ca running"                "nomad job status step-ca | grep -c 'running'" 2
   check "consul: step-ca and its sidecar are passing" "consul catalog services | grep -cx -e step-ca -e step-ca-sidecar-proxy" 2
 fi
+mon=$(cvar cluster_monitoring_enabled)
+if [ "$mon" = True ] || [ "$mon" = true ]; then
+  check "nomad: monitoring-server running (one allocation)" "nomad job status monitoring-server | grep -c ' run  *running'" 1
+  check "nomad: monitoring-agent on every client"  "[ \$(nomad job status monitoring-agent | grep -c ' run  *running') -ge $clients ] && echo yes" yes
+  check "nomad: ntfy running"                      "nomad job status ntfy | grep -c ' run  *running'" 1
+  check "consul: grafana, gatus, loki, prometheus registered" "consul catalog services | grep -cx -e monitoring-grafana -e monitoring-gatus -e monitoring-loki -e monitoring-prometheus" 4
+  check "consul: no monitoring check is critical" "curl -s -H \"X-Consul-Token: \$CONSUL_HTTP_TOKEN\" --cacert $(cvar cluster_tls_dir)/ca.pem https://127.0.0.1:$(cvar cluster_consul_https_port)/v1/health/state/critical | grep -c monitoring" 0
+fi
 # the ops UIs are not on the public entry point any more (they live in the zone behind the VPN)
 for h in nomad consul traefik; do
   check "ingress: $h.$domain is not published (404)" "curl -sk -o /dev/null -w '%{http_code}' --resolve $h.$domain:443:127.0.0.1 https://$h.$domain/" 404

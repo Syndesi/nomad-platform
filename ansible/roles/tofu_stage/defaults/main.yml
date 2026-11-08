@@ -35,6 +35,10 @@ tofu_stage_nomad_port: 14646
 # cluster .env, %HOST% = the node; same contract as the scripts) plus nc on the node. Default is ssh with the
 # controller's client config (cluster_ssh_config_file).
 # (nc: busybox on alpine, netcat-openbsd on ubuntu - installed with the base packages.)
+# Every connection of tofu to the apis is a command on the node. With plain ssh that is a new login each (the nodes rate limit new ssh connections per
+# source address: a state with many objects hits it, the symptom is EOF from the apis); the ssh default therefore shares one connection (ControlMaster, a few
+# seconds after the last use it is closed) and tofu works on a few objects at a time (the channels of one connection are limited, sshd MaxSessions).
+tofu_stage_parallelism: 4
 tofu_stage_server: "{{ groups['cluster_servers'][0] }}"
 tofu_stage_tunnel_command: >-
-  {{ (lookup('ansible.builtin.env', 'CLUSTER_EXEC') | default('', true) or 'ssh -F ' ~ cluster_ssh_config_file ~ ' %HOST%') | replace('%HOST%', tofu_stage_server) }} nc 127.0.0.1 %PORT%
+  {{ (lookup('ansible.builtin.env', 'CLUSTER_EXEC') | default('', true) or 'ssh -F ' ~ cluster_ssh_config_file ~ ' -o ControlMaster=auto -o ControlPath=' ~ cluster_run_dir ~ '/cm-%C -o ControlPersist=20s %HOST%') | replace('%HOST%', tofu_stage_server) }} nc 127.0.0.1 %PORT%

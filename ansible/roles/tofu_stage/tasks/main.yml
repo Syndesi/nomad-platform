@@ -55,6 +55,7 @@
           - -input=false
           - -auto-approve
           - -no-color
+          - "-parallelism={{ tofu_stage_parallelism }}"
           - "-var-file={{ tofu_stage_varfile }}"
       register: tofu_stage_apply
       changed_when: "'Resources: 0 added, 0 changed, 0 destroyed' not in tofu_stage_apply.stdout"

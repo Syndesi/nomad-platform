@@ -7,6 +7,11 @@ log_level = "INFO"
 # no calls home: no check for new versions / security bulletins (and so no anonymous signature for it)
 disable_update_check = true
 disable_anonymous_signature = true
+# prometheus format on /v1/agent/metrics (needs a token: acl agent:read), read by the monitoring agent
+telemetry {
+  prometheus_retention_time = "60s"
+  disable_hostname = true
+}
 
 bind_addr = "{{ consul_ip }}"
 advertise_addr = "{{ consul_ip }}"

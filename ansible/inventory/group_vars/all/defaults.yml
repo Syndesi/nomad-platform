@@ -289,6 +289,8 @@ authelia_internal_access_rules: >-
       {'domain': 'nomad.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
       {'domain': 'consul.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
       {'domain': 'traefik.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']}]
+     + ([{'domain': 'grafana.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
+         {'domain': 'status.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']}] if cluster_monitoring_enabled | bool else [])
      + authelia_internal_extra_rules }}
 
 # ---- projects: scoped access for CI and third party apps (docs/projects.md) --------------------------------------------------
@@ -311,9 +313,9 @@ cluster_tetragon_metrics_port: 2112
 cluster_tetragon_log_dir: /var/log/tetragon
 cluster_tetragon_log_max_size_mb: 50
 cluster_tetragon_log_max_backups: 7
-# shipped policies: network-connect (observe: tcp connections of container processes), block-metadata-service (ENFORCE: kills a container process that
-# connects to 169.254.169.254, the metadata service of cloud providers)
-cluster_tetragon_presets: []
+# shipped policies: block-metadata-service (ENFORCE, on by default: kills a container process that connects to 169.254.169.254, the metadata service of
+# cloud providers), network-connect (observe: tcp connections of container processes; chatty, add it when you want to look)
+cluster_tetragon_presets: [block-metadata-service]
 # less noise in the event log (all of them can be switched off):
 #   quiet_runtime - runc / containerd-shim / docker-init events (container plumbing, three or four per container start)
 #   quiet_deploys - events of the ansible user (a deploy starts thousands of processes) except its sudo / doas calls. The account is root equivalent:
@@ -327,6 +329,43 @@ cluster_tetragon_export_denylist: []
 # extra settings: flag name -> value, one file each in /etc/tetragon/tetragon.conf.d (e.g. export-denylist, enable-cri)
 cluster_tetragon_config: {}
 cluster_tetragon_fragments_dir: "{{ cluster_dir }}/tetragon.d"
+
+# ---- monitoring: logs, metrics, alerts, status page (docs/monitoring.md) -----------------------------------------------------------------
+# Vector on every client node ships container logs, Tetragon's events and metrics (Nomad, Consul, Tetragon and every consul service tagged `metrics`) to
+# the monitoring server: Loki, Prometheus, Alertmanager, Grafana (login through authelia-internal, database in its own Postgres) and Gatus (status page) in one
+# allocation on cluster_monitoring_node, plus ntfy (https://ntfy.<cluster_domain>, public) for the alerts. The web uis are behind the VPN:
+# grafana.<zone> and status.<zone>. No dashboards are deployed. false: none of it.
+cluster_monitoring_enabled: true
+# where the server runs: a client; by default the server node if it is a client, else the first client
+cluster_monitoring_node: "{{ (groups['cluster_servers'] | intersect(groups['cluster_clients']) + groups['cluster_clients']) | first }}"
+# logs and metrics are kept this long in Loki and Prometheus (what the nodes keep: cluster_log_retention_days)
+cluster_monitoring_retention_days: 45
+# the data of the server (one folder per component) on cluster_monitoring_node, and Vector's checkpoints on every client
+cluster_monitoring_dir: /srv/monitoring
+# published ports (cluster network only) on cluster_monitoring_node: Grafana and Gatus behind traefik, ntfy for traefik and Alertmanager
+cluster_monitoring_grafana_port: 3300
+cluster_monitoring_gatus_port: 8480
+cluster_monitoring_ntfy_port: 8580
+cluster_monitoring_ntfy_topic: alerts
+cluster_monitoring_postgres_image: postgres:17.11-alpine3.23
+cluster_monitoring_loki_image: grafana/loki:3.7.9
+cluster_monitoring_prometheus_image: prom/prometheus:v3.16.0
+cluster_monitoring_alertmanager_image: prom/alertmanager:v0.34.2
+cluster_monitoring_grafana_image: grafana/grafana:13.3.0
+cluster_monitoring_gatus_image: twinproduction/gatus:v5.38.0
+cluster_monitoring_vector_image: timberio/vector:0.61.0-alpine
+cluster_monitoring_ntfy_image: binwiederhier/ntfy:v2.37.2
+# the name in the status page
+cluster_monitoring_title: "{{ cluster_domain }}"
+# the cluster's own Prometheus alert rules: a list of rule groups, as in a Prometheus rule file (`- name: ..., rules: [{alert, expr, for, labels, annotations}]`).
+# Alerts go through the same Alertmanager to ntfy. (Rules in the Grafana ui work too.)
+cluster_monitoring_extra_rules: []
+# Single sign-on of Grafana with authelia-internal (OpenID Connect). OFF: it does not work yet. Grafana's server-side calls (token, userinfo) reach authelia
+# on the node's address, and authelia builds its issuer from the Host header (no port allowed, no override): they are answered with 400. It needs a way for
+# Grafana to reach authelia-internal under its name on port 443 (see docs/monitoring.md, "Login"). Until then: Grafana's own login (user admin).
+cluster_monitoring_oidc_enabled: false
+# public rules the platform adds to authelia_access_rules: ntfy has its own login (the phones cannot answer a forward-auth)
+authelia_platform_public_rules: "{{ [{'domain': 'ntfy.' ~ cluster_domain, 'policy': 'bypass'}] if cluster_monitoring_enabled | bool else [] }}"
 
 # ---- step-ca: the always-online intermediate CA (job step-ca), reached only through the Consul service mesh ----
 cluster_stepca_enabled: true

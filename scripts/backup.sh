@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Backup of what lives only on the servers: the Nomad and Consul raft snapshots (jobs, variables, ACLs, KV, intentions),
-# the tofu states that belong to them (task restore needs both from the same moment), the database of authelia (second factors, SQL dump) and traefik's acme.json (the ACME account and certificates, only with a public ACME CA). NOT included: application
+# the tofu states that belong to them (task restore needs both from the same moment), the database of authelia (second factors, SQL dump), Grafana's database (SQL dump) and traefik's acme.json (the ACME account and certificates, only with a public ACME CA). NOT included: application
 # data, host volumes, anything the cluster repo already holds (inventory, encrypted secrets, states).
 # Every file is age-encrypted to the recipients of .sops.yaml, so the backups are safe to move off site. Inside the tools
 # container, via `task backup`; written to <cluster repo>/backups/<name>-<time>/ (git-ignored), the newest BACKUP_KEEP stay.
@@ -76,6 +76,20 @@ if [ "$(cvar cluster_stepca_enabled)" = True ] || [ "$(cvar cluster_stepca_enabl
     age -d -i "${SOPS_AGE_KEY_FILE:-/age/keys.txt}" "$out/step-ca-db.tar.age" | tar -tf - >/dev/null || { echo "step-ca database tar is not readable" >&2; exit 1; }
   else
     rm -f "$out/step-ca-db.tar.age"; echo "(step-ca is not running: its database is not in this backup)" >&2
+  fi
+fi
+
+# Grafana's database (dashboards, folders, alert rules, users): a pg_dump made inside the running postgres container of the monitoring stack. The logs and
+# metrics (Loki, Prometheus) are not part of any backup.
+if [ "$(cvar cluster_monitoring_enabled)" = True ] || [ "$(cvar cluster_monitoring_enabled)" = true ]; then
+  mnode=$(cvar cluster_monitoring_node)
+  # shellcheck disable=SC2016 # runs on the node
+  dump='c=$(docker ps -q --filter label=com.hashicorp.nomad.job_name=monitoring-server --filter label=com.hashicorp.nomad.task_name=postgres | head -1); [ -n "$c" ] && docker exec "$c" pg_dump -U grafana --clean --if-exists grafana'
+  if cluster_root "$mnode" "$dump" | age "${rflags[@]}" > "$out/grafana-db.sql.age" && [ -s "$out/grafana-db.sql.age" ] \
+     && age -d -i "${SOPS_AGE_KEY_FILE:-/age/keys.txt}" "$out/grafana-db.sql.age" > "$work/grafana.sql" && grep -q 'PostgreSQL database dump' "$work/grafana.sql"; then
+    rm -f "$work/grafana.sql"
+  else
+    rm -f "$out/grafana-db.sql.age"; echo "(the monitoring stack is not running: Grafana's database is not in this backup)" >&2
   fi
 fi
 

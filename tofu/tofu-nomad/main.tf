@@ -95,10 +95,24 @@ resource "nomad_acl_policy" "deployer" {
         path "nomad/jobs/authelia-internal" { capabilities = ["deny"] }
         path "nomad/jobs/traefik" { capabilities = ["deny"] }
         path "nomad/jobs/step-ca" { capabilities = ["deny"] }
+        path "nomad/jobs/monitoring-server" { capabilities = ["deny"] }
+        path "nomad/jobs/monitoring-agent" { capabilities = ["deny"] }
+        path "nomad/jobs/ntfy" { capabilities = ["deny"] }
         path "nomad/jobs/traefik/traefik/vpn" { capabilities = ["deny"] }
       }
     }
     host_volume "*" { policy = "write" }
+    node { policy = "read" }
+    agent { policy = "read" }
+  EOT
+}
+
+# What the monitoring agent reads from the nomad api: the metrics, and (on one node) the nodes, allocations and deployments of all namespaces
+resource "nomad_acl_policy" "monitoring" {
+  name        = "monitoring"
+  description = "the monitoring agent: metrics, nodes, allocations and deployments (read only, no logs, no variables, no exec)"
+  rules_hcl   = <<-EOT
+    namespace "*" { capabilities = ["list-jobs", "read-job"] }
     node { policy = "read" }
     agent { policy = "read" }
   EOT
@@ -127,9 +141,10 @@ resource "nomad_acl_policy" "ui" {
 
 resource "nomad_acl_token" "client" {
   for_each = {
-    deployer = nomad_acl_policy.deployer.name
-    readonly = nomad_acl_policy.readonly.name
-    ui       = nomad_acl_policy.ui.name
+    deployer   = nomad_acl_policy.deployer.name
+    readonly   = nomad_acl_policy.readonly.name
+    ui         = nomad_acl_policy.ui.name
+    monitoring = nomad_acl_policy.monitoring.name
   }
   name     = "${var.datacenter}-${each.key}"
   type     = "client"
@@ -227,4 +242,29 @@ resource "nomad_variable" "traefik" {
     # public; the job renders it into the task, so no host path has to be mounted
     ca_cert = local.ca_pem
   }
+}
+
+# ---- the monitoring stack: variables of its jobs (nomad/jobs/<job>) ---------------------------------------------------------------------
+
+# the agents' tokens (vector): nomad (policy monitoring) and consul (policy monitoring), and the CA to verify the apis with
+resource "nomad_variable" "monitoring_agent" {
+  count = var.monitoring_consul_token != "" ? 1 : 0
+  path  = "nomad/jobs/monitoring-agent"
+  items = {
+    nomad_token  = nomad_acl_token.client["monitoring"].secret_id
+    consul_token = var.monitoring_consul_token
+    ca_cert      = local.ca_pem
+  }
+}
+
+resource "nomad_variable" "monitoring_server" {
+  count = length(var.monitoring_server_items) > 0 ? 1 : 0
+  path  = "nomad/jobs/monitoring-server"
+  items = merge(var.monitoring_server_items, { ca_cert = local.ca_pem })
+}
+
+resource "nomad_variable" "ntfy" {
+  count = length(var.ntfy_items) > 0 ? 1 : 0
+  path  = "nomad/jobs/ntfy"
+  items = var.ntfy_items
 }

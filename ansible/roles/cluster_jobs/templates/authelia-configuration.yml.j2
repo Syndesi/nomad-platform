@@ -75,6 +75,38 @@ access_control:
 {% endfor %}
 {% endif %}
 {% endfor %}
+{% if authelia_inst.oidc | default({}) %}
+# OpenID Connect provider (RFC 8414 discovery at /.well-known/openid-configuration): applications log in with the accounts of this instance and its second factor
+identity_providers:
+  oidc:
+    hmac_secret: {{ authelia_inst.oidc.hmac_secret | to_json }}
+    jwks:
+      - key_id: main
+        algorithm: RS256
+        use: sig
+        key: |
+{{ authelia_inst.oidc.jwks_key | indent(10, true) }}
+    clients:
+{% for c in authelia_inst.oidc.clients %}
+      - client_id: {{ c.id | to_json }}
+        client_name: {{ c.name | to_json }}
+        client_secret: {{ c.secret_hash | to_json }}
+        public: false
+        authorization_policy: two_factor
+        # first party and behind a second factor already: no consent page
+        consent_mode: implicit
+        require_pkce: true
+        pkce_challenge_method: S256
+        redirect_uris:
+{% for u in c.redirect_uris %}
+          - {{ u | to_json }}
+{% endfor %}
+        scopes: [openid, profile, email, groups]
+        response_types: [code]
+        grant_types: [authorization_code]
+        token_endpoint_auth_method: client_secret_basic
+{% endfor %}
+{% endif %}
 authentication_backend:
   refresh_interval: 5m
   password_reset:

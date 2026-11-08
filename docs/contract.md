@@ -78,6 +78,7 @@ sees it); there is no path variable to set.
 |---|---|
 | `nomad.d/[6-9]N-*.hcl.j2` | templated into `/etc/nomad.d` on every node (jinja, e.g. `{% if inventory_hostname in groups[...] %}`) before the single validate + restart. Host volumes, devices, plugins, per-node meta. Removing the file removes the fragment from the nodes |
 | `consul.d/[6-9]N-*.hcl.j2` | same for `/etc/consul.d` |
+| (variable) `cluster_monitoring_extra_rules` | own Prometheus alert rule groups for the monitoring stack (`docs/monitoring.md`) |
 | `tetragon.d/*.yaml` | Tetragon tracing policies (jinja allowed), loaded on every node with the presets of `cluster_tetragon_presets`. Removing the file removes the policy |
 | `playbooks/*.yml` | run in name order after `site.yml` by `task deploy:ansible`, and, limited to the one node, by `task node -- <host>`. Own roles can be added in `roles/` (on the roles path), own jobs can be run with `include_role: {name: cluster_jobs, tasks_from: job}` |
 | `compose.override.yml` | extra mounts / environment for the tools container (the incus demo mounts the incus client config) |

@@ -18,6 +18,17 @@ resource "consul_acl_policy" "traefik" {
   EOT
 }
 
+# the monitoring agents (vector): consul's own metrics and the health of all checks
+resource "consul_acl_policy" "monitoring" {
+  name        = "monitoring"
+  description = "monitoring agent (read only: agent metrics, catalog, health)"
+  rules       = <<-EOT
+    agent_prefix "" { policy = "read" }
+    node_prefix "" { policy = "read" }
+    service_prefix "" { policy = "read" }
+  EOT
+}
+
 resource "consul_acl_policy" "nomad_agent" {
   name        = "nomad-agent"
   description = "nomad agents register themselves as services"
@@ -57,6 +68,7 @@ resource "consul_acl_token" "service" {
   for_each = {
     traefik     = "traefik"
     nomad-agent = "nomad-agent"
+    monitoring  = "monitoring"
     readonly    = "builtin/global-read-only"
     # What the controller works with (tofu, backup, restore) once the bootstrap token (`initial_management`) is handed over and deleted
     # (role consul, tasks handover). Same power; the difference is that its secret is in no config file of any node.
@@ -65,7 +77,7 @@ resource "consul_acl_token" "service" {
   }
   description = "${each.key} (managed by opentofu)"
   policies    = [each.value]
-  depends_on  = [consul_acl_policy.traefik, consul_acl_policy.nomad_agent, consul_acl_policy.dns]
+  depends_on  = [consul_acl_policy.traefik, consul_acl_policy.nomad_agent, consul_acl_policy.dns, consul_acl_policy.monitoring]
 }
 
 data "consul_acl_token_secret_id" "agent" {
@@ -115,6 +127,32 @@ resource "consul_config_entry" "stepca_intentions" {
   config_json = jsonencode({
     Sources = [
       { Name = "traefik-acme", Action = "allow", Precedence = 9 },
+      { Name = "*", Action = "deny", Precedence = 1 },
+    ]
+  })
+}
+
+# The monitoring server is reachable through the mesh only (Loki for the logs, Prometheus for remote write): only the service "monitoring-vector" (the
+# agents) may connect, everything else is denied.
+resource "consul_config_entry" "monitoring_loki_intentions" {
+  count = var.monitoring_enabled ? 1 : 0
+  name  = "monitoring-loki"
+  kind  = "service-intentions"
+  config_json = jsonencode({
+    Sources = [
+      { Name = "monitoring-vector", Action = "allow", Precedence = 9 },
+      { Name = "*", Action = "deny", Precedence = 1 },
+    ]
+  })
+}
+
+resource "consul_config_entry" "monitoring_prometheus_intentions" {
+  count = var.monitoring_enabled ? 1 : 0
+  name  = "monitoring-prometheus"
+  kind  = "service-intentions"
+  config_json = jsonencode({
+    Sources = [
+      { Name = "monitoring-vector", Action = "allow", Precedence = 9 },
       { Name = "*", Action = "deny", Precedence = 1 },
     ]
   })

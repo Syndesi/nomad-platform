@@ -22,6 +22,16 @@ Notable changes per version. Older history is in git.
 - **Tetragon** (role `tetragon`, `docs/reference.md` "Runtime security"): eBPF runtime security on every node, from the pinned static release (same files on Alpine and
   Ubuntu). Json event log, Prometheus metrics on the node's cluster address (port 2112, firewall: cluster subnets), shipped policy presets
   (`cluster_tetragon_presets`: `network-connect`, `block-metadata-service` which enforces); quiet filters on by default (`cluster_tetragon_quiet_runtime|quiet_deploys|slim_events`: container plumbing, the ansible user's deploys except sudo, capability/namespace fields), no `binary` metric label and the cluster repo's `tetragon.d/*.yaml`. Off with `cluster_tetragon_enabled: false`.
+- **Monitoring** (`docs/monitoring.md`, `cluster_monitoring_enabled`, on by default): Vector on every client (docker logs, Tetragon events, cluster events polled from Nomad and
+  Consul, metrics of Nomad / Consul / Tetragon and of every Consul service tagged `metrics`), and on one node (`cluster_monitoring_node`) Loki, Prometheus
+  (remote write sink), Alertmanager, Grafana with its own PostgreSQL, Gatus (status page, replaces uptime kuma) in one allocation, plus ntfy (`ntfy.<domain>`, public) as the
+  notification target. Internal only: `grafana.<zone>` and `status.<zone>` behind the VPN; Loki and Prometheus only through the mesh (intentions). No dashboards.
+  Retention: node logs `cluster_log_retention_days` (7), Loki / Prometheus `cluster_monitoring_retention_days` (45). New secrets: `task secrets:ensure`. Grafana's database is in `task backup`.
+  Nomad now publishes allocation metrics (`nomad_publish_workload_metrics`, readable without a token by any container).
+- **Fix: secrets in containers on systemd nodes.** Nomad's unit had `ProtectKernelModules`, `ProtectKernelLogs` and `ProtectClock`: they put the service in a private mount
+  namespace, so the tmpfs of every task's `secrets/` directory was invisible to Docker (empty `/secrets`: templates in `secrets/`, the Envoy bootstrap of Connect sidecars). Removed.
+- The tofu stages share one ssh connection to the node (ControlMaster) and apply four objects at a time (`tofu_stage_parallelism`): a state with many objects ran into
+  the nodes' ssh rate limit (EOF from the APIs). `block-metadata-service` is on by default.
 - Tools image: `util-linux-misc` (`column`), used by `task projects` and `task vpn:list`.
 - `scripts/vpn.sh client` also writes `connect.sh` / `disconnect.sh` (VPN up and down without installing: wstunnel + wireguard + /etc/hosts, for CI runners).
 - Docs: `task tokens` lists accessor ids (the reference said it printed the tokens).

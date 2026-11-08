@@ -77,6 +77,21 @@ http:
       service: consul
       rule: Host(`consul-api.{{ $zone }}`)
       tls: { options: default{{ with $stepca }}, certResolver: stepca{{ end }} }
+{{- with env "TPL_GRAFANA_ADDR" }}
+    # the monitoring server (docs/monitoring.md): Grafana (its own login is authelia's OpenID Connect) and the status page
+    grafana:
+      entryPoints: [vpn]
+      middlewares: [admin-net, admin-headers]
+      service: grafana
+      rule: Host(`grafana.{{ $zone }}`)
+      tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
+    status:
+      entryPoints: [vpn]
+      middlewares: [admin-net, admin-headers]
+      service: status
+      rule: Host(`status.{{ $zone }}`)
+      tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
+{{- end }}
     traefik:
       entryPoints: [vpn]
       middlewares: [admin-net, admin-headers]
@@ -167,6 +182,18 @@ http:
         serversTransport: cluster-ca
         servers:
           - url: https://{{ $host }}:{{ env "TPL_CONSUL_PORT" }}
+{{- with env "TPL_GRAFANA_ADDR" }}
+    grafana:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://{{ . }}
+    status:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://{{ env "TPL_GATUS_ADDR" }}
+{{- end }}
 # The VPN's way in: tcp/443 with the SNI {{ env "TPL_VPN_HOST" }} goes to wstunnel in this namespace, TLS passed through (wstunnel terminates it and asks
 # for the client certificate). Defined here and not by tags: whoever submits a job writes tags.
 tcp:
