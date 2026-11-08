@@ -1,0 +1,35 @@
+---
+# gVisor (runsc) for the docker containers of nomad jobs: installs the build of `task build` (runsc + its gvisor-bin/ sidecars; the tar of
+# binaries/build-runsc.sh). The docker runtimes that point at it are written to daemon.json by cluster_dns (one writer for the file), and
+# nomad's docker plugin allows them (nomad role). Nothing is restarted here.
+# Every version has its own directory: a sandbox that still runs after an upgrade (live-restore, the agent restarts) keeps its runsc and its sidecars.
+- name: "gvisor: check the built tar exists on the controller"
+  ansible.builtin.stat:
+    path: "{{ cluster_gvisor_artifact }}"
+  delegate_to: localhost
+  become: false
+  register: gvisor_artifact_stat
+
+- name: "gvisor: fail early if it is missing"
+  ansible.builtin.assert:
+    that: gvisor_artifact_stat.stat.exists
+    fail_msg: >-
+      {{ cluster_gvisor_artifact }} not found (os={{ ansible_facts['distribution'] }}, arch={{ ansible_facts['architecture'] }}).
+      Run `task build` first.
+    quiet: true
+
+- name: "gvisor: directory of this version"
+  ansible.builtin.file:
+    path: "{{ cluster_gvisor_version_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "gvisor: runsc and its sidecars"
+  ansible.builtin.unarchive:
+    src: "{{ cluster_gvisor_artifact }}"
+    dest: "{{ cluster_gvisor_version_dir }}"
+    owner: root
+    group: root
+    creates: "{{ cluster_gvisor_version_dir }}/gvisor-bin/gvisor_sentry"

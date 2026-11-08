@@ -375,6 +375,8 @@ EOT
         }
 
         config {
+          # gVisor does not do this: the wireguard interface and its routes need the real kernel (netlink), so this task stays on runc (cluster_gvisor_*)
+          runtime = "runc"
           image   = var.wireguard_image
           cap_add = ["net_admin"]
           sysctl = {
@@ -425,6 +427,8 @@ EOT
       }
 
       config {
+        # gVisor does not do this: the wireguard interface and its routes need the real kernel (netlink), so this task stays on runc (cluster_gvisor_*)
+        runtime = "runc"
         image   = var.wireguard_image
         cap_add = ["net_admin"]
         sysctl = {
@@ -590,6 +594,8 @@ EOT
       }
 
       config {
+        # runc: dnsmasq subscribes to rtnetlink multicast groups to follow the interfaces, which gVisor does not implement ("cannot create netlink socket")
+        runtime         = "runc"
         image           = var.dnsmasq_image
         entrypoint      = ["dnsmasq"]
         args            = ["-k", "-C", "/local/dnsmasq.conf"]

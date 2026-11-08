@@ -156,7 +156,7 @@ if mgmt "nomad job run -var datacenter=$(cvar cluster_datacenter) -var clients=$
       p="container ($g) on $node"
       check_alloc "$p: resolves authelia.service.consul"   "$id" "nslookup authelia.service.consul"   yes
       check_alloc "$p: resolves host.internal"                       "$id" "nslookup host.internal"           yes
-      check_alloc "$p: has no global ipv6 address"                   "$id" "! ip -6 addr show scope global | grep -q inet6" yes
+      check_alloc "$p: has no global ipv6 address"                   "$id" "! ip -6 addr show scope global | grep inet6 | grep -qv 'inet6 fe80:'" yes
       if [ "$g" = bridge ]; then
         check_alloc "$p: public dns is refused"                      "$id" "nslookup example.com"             no
         check_alloc "$p: no internet"                                "$id" "wget -q -T 3 -O /dev/null http://1.1.1.1" no
@@ -172,6 +172,36 @@ else
   echo "FAIL  network-test deploy"; tail -15 /tmp/network-run.log; fail=1
 fi
 mgmt "nomad job stop -purge network-test >/dev/null; rm -f /tmp/network.nomad.hcl; true"
+
+# gVisor: the kernel a container sees tells the runtime (a gVisor sandbox: "gvisor", runc: the node's own). The network rules are the same for all of them.
+gv=$(cvar cluster_gvisor_enabled)
+if [ "$gv" = True ] || [ "$gv" = true ]; then
+  echo "-- docker runtimes (default $(cvar cluster_gvisor_default_runtime), opt out with runtime = \"runc\")"
+  gvdef=$(cvar cluster_gvisor_default_runtime)
+  mgmt "cat > /tmp/gvisor.nomad.hcl" "$BASE/tests/gvisor.nomad.hcl"
+  if mgmt "nomad job run -var datacenter=$(cvar cluster_datacenter) -var clients=$clients /tmp/gvisor.nomad.hcl" >/tmp/gvisor-run.log 2>&1; then
+    echo "ok    gvisor-test deployed: a container of each runtime on every client"
+    for g in default runc strict; do
+      ids=$(mgmt "nomad job allocs -json gvisor-test | jq -r '.[]|select(.TaskGroup==\"$g\" and .ClientStatus==\"running\")|.ID'")
+      [ "$(printf '%s\n' "$ids" | grep -c .)" = "$clients" ] || { echo "FAIL  gvisor-test: $g runs on $(printf '%s\n' "$ids" | grep -c .) of $clients clients"; fail=1; }
+      for id in $ids; do
+        node=$(mgmt "nomad alloc status -json $id | jq -r .NodeName")
+        p="container ($g) on $node"
+        if [ "$g" = runc ] || { [ "$g" = default ] && [ "$gvdef" = runc ]; }; then
+          check_alloc "$p: runs on the node's kernel" "$id" "! uname -r | grep -q gvisor" yes
+        else
+          check_alloc "$p: runs in a gVisor sandbox" "$id" "uname -r | grep -q gvisor" yes
+        fi
+        check_alloc "$p: resolves authelia.service.consul" "$id" "nslookup authelia.service.consul" yes
+        check_alloc "$p: public dns is refused"            "$id" "nslookup example.com"             no
+        check_alloc "$p: no internet"                      "$id" "wget -q -T 3 -O /dev/null http://1.1.1.1" no
+      done
+    done
+  else
+    echo "FAIL  gvisor-test deploy"; tail -15 /tmp/gvisor-run.log; fail=1
+  fi
+  mgmt "nomad job stop -purge gvisor-test >/dev/null; rm -f /tmp/gvisor.nomad.hcl; true"
+fi
 
 if [ "${1:-}" = connect ]; then
   echo "-- consul connect (envoy sidecars through the cni bridge)"

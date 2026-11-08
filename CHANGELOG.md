@@ -4,6 +4,13 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- **gVisor is the default docker runtime** (role `gvisor`, `docs/reference.md` "Containers in gVisor", `cluster_gvisor_*`): `runsc` is built from source by `task build` (`binaries/Dockerfile.gvisor`,
+  new `.env` variables `GVISOR_VERSION` and `GVISOR_GO_COMMIT`, **add them to the `.env` of every cluster**), installed on the client nodes and registered as docker runtimes `runsc-host` (the default: gVisor on the
+  network of the group's namespace, works with Connect sidecars and all firewall rules), `runsc` (own network stack, one container per namespace) and the unchanged `runc` (opt out with
+  `runtime = "runc"` in a task). Nomad's `allow_runtimes` lists them. In the platform's jobs the data stores (postgres, loki, prometheus), grafana, the wireguard task, the two dnsmasq and the
+  docker-socket tasks of the monitoring agent stay on runc; everything else, Envoy sidecars included, runs in a sandbox. Costs and limits (memory, process creation, `/proc/net`, Tetragon
+  does not see into sandboxes) are in the reference. Jobs of your own run in gVisor with the next `nomad job run`; give databases `runtime = "runc"`. `cluster_gvisor_default_runtime: runc` keeps the old behaviour for jobs
+  without a `runtime`. `task smoke` gets the section "docker runtimes".
 - **OpenID Connect for your own apps**: both authelias can be the provider (`authelia_oidc_clients` public, `authelia_internal_oidc_clients` behind the VPN;
   client options `require_pkce`, `token_auth_method`). An app with a client gets a Consul mesh sidecar to `auth.<domain>` / `auth.<zone>` on port 443 (`mesh_service`;
   intentions by tofu-consul, the name resolves to the allocation's loopback via the node's restricted dnsmasq, the certificates carry the names), so the token
@@ -23,7 +30,7 @@ Notable changes per version. Older history is in git.
 - **Docker `live-restore`** in `/etc/docker/daemon.json`: a Docker update no longer restarts the containers (limits in `docs/reference.md`).
 - **Docker settings:** `default-cgroupns-mode: private`, `userland-proxy: false`, `default-ulimits` nofile 1048576 (`cluster_docker_nofile`). Nomad's
   `allow_caps` is set on every client now (before: only where extra capabilities were configured) and lacks `mknod`, `audit_write` and `setfcap`; privileged mode and
-  `pid_mode = "host"` stay refused, runtimes are not restricted (nvidia works).
+  `pid_mode = "host"` stay refused, `allow_runtimes` lists runc, the gVisor runtimes and those of `cluster_docker_daemon_extra` (nvidia works).
 - **Tetragon** (role `tetragon`, `docs/reference.md` "Runtime security"): eBPF runtime security on every node, from the pinned static release (same files on Alpine and
   Ubuntu). Json event log, Prometheus metrics on the node's cluster address (port 2112, firewall: cluster subnets), shipped policy presets
   (`cluster_tetragon_presets`: `network-connect`, `block-metadata-service` which enforces); quiet filters on by default (`cluster_tetragon_quiet_runtime|quiet_deploys|slim_events`: container plumbing, the ansible user's deploys except sudo, capability/namespace fields), no `binary` metric label and the cluster repo's `tetragon.d/*.yaml`. Off with `cluster_tetragon_enabled: false`.

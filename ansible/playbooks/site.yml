@@ -227,7 +227,7 @@
     # nodes that run workloads: docker (nomad docker driver), the dns forwarder, cni plugins + iptables for bridge networking
     client_packages:
       Debian: [docker.io, containernetworking-plugins, iptables, dnsmasq-base]
-      Alpine: [docker, dnsmasq, cni-plugins, iptables]
+      Alpine: [docker, dnsmasq, cni-plugins, iptables, tar]
   tasks:
     - name: Facts
       ansible.builtin.setup:
@@ -310,6 +310,11 @@
       ansible.builtin.include_role:
         name: docker_engine
       when: inventory_hostname in groups['cluster_clients']
+
+    - name: gVisor (runsc), a docker runtime
+      ansible.builtin.include_role:
+        name: gvisor
+      when: inventory_hostname in groups['cluster_clients'] and cluster_gvisor_enabled | bool
 
     - name: Bridge networking for consul connect sidecars
       ansible.builtin.include_role:

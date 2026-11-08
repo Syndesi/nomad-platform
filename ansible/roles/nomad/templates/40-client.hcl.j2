@@ -37,6 +37,8 @@ plugin "docker" {
     volumes {
       enabled = {{ cluster_docker_volumes_enabled | bool | lower }}
     }
+    # the docker runtimes a job may name (`runtime` in its docker task config): runc, and the gVisor ones (cluster_gvisor_*)
+    allow_runtimes = {{ cluster_docker_runtimes_allowed | to_json }}
     # what cap_add may name (see nomad_docker_default_caps); privileged mode stays off (allow_privileged defaults to false)
     allow_caps = {{ (nomad_docker_default_caps + nomad_docker_extra_caps) | unique | to_json }}
     gc {

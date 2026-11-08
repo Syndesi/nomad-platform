@@ -152,6 +152,29 @@ cluster_docker_volumes_enabled: false
 # Merged into /etc/docker/daemon.json (the platform writes `dns`); e.g. the nvidia runtime of a gpu node:
 #   cluster_docker_daemon_extra: { runtimes: { nvidia: { path: nvidia-container-runtime, args: [] } } }
 cluster_docker_daemon_extra: {}
+# --- gVisor ---------------------------------------------------------------------------------------
+# gVisor (runsc) runs a container on a user space kernel: the container's syscalls hit that kernel, not the host's, so a compromised
+# container (a supply chain attack in an image, a bug in an app that faces the internet) has a far smaller attack surface than with runc.
+# The price: slower syscalls and file i/o, fewer supported syscalls. Docker gets these runtimes on every client node:
+#   runsc        gVisor with its own network stack. Each container (task) has its own loopback, so it cannot be used for groups with
+#                consul connect sidecars (the app reaches its sidecar on 127.0.0.1)
+#   runsc-host   gVisor on the network stack of the host's network namespace (the container's own, i.e. nomad's bridge): the container
+#                keeps its ip and the firewall rules, containers of one group share the loopback. A smaller isolation of the network part.
+#   runc         docker's default runtime, for trusted and performant things (databases, ...)
+# A job picks one in its docker config: `runtime = "runc"`. cluster_gvisor_default sets the one for jobs that do not say.
+cluster_gvisor_enabled: true
+cluster_gvisor_default_runtime: runsc-host
+cluster_gvisor_version: "{{ lookup('ansible.builtin.env', 'GVISOR_VERSION') }}"
+cluster_gvisor_platform: systrap
+cluster_gvisor_dir: /usr/local/lib/gvisor
+cluster_gvisor_version_dir: "{{ cluster_gvisor_dir }}/{{ cluster_gvisor_version }}"
+cluster_gvisor_artifact: "/artifacts/runsc-{{ cluster_gvisor_version }}-{{ {'Alpine': 'alpine', 'Ubuntu': 'ubuntu'}.get(ansible_facts['distribution'], 'unsupported') }}-{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_facts['architecture'], 'unsupported') }}.tar"
+# the entries of daemon.json (merged by cluster_dns)
+cluster_gvisor_docker_daemon: >-
+  {{ {'runtimes': {'runsc': {'path': cluster_gvisor_version_dir ~ '/runsc', 'runtimeArgs': ['--platform=' ~ cluster_gvisor_platform]},
+                   'runsc-host': {'path': cluster_gvisor_version_dir ~ '/runsc', 'runtimeArgs': ['--platform=' ~ cluster_gvisor_platform, '--network=host', '--host-uds=open']}}}
+     | combine({'default-runtime': cluster_gvisor_default_runtime} if cluster_gvisor_default_runtime != 'runc' else {}) }}
+cluster_docker_runtimes_allowed: "{{ (['runc', 'runsc', 'runsc-host'] if cluster_gvisor_enabled | bool else ['runc']) + (cluster_docker_daemon_extra.runtimes | default({}) | list) }}"
 # Image with a `sqlite3` binary (any image that has one in its PATH; use a version tag, no digests and no `latest`). `task backup` and `task restore` run it as a throwaway
 # container on the authelia node (no network, only the authelia folder mounted) to dump / replay Authelia's database: nothing is installed on the nodes.
 # The nodes pull it through docker when it is first used.

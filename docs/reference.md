@@ -203,13 +203,58 @@ Do not add them back (the comment in `ansible/roles/nomad/tasks/main.yml` says t
 * **What confines a container:** the default seccomp profile on both OS families, AppArmor (`docker-default`) additionally on Ubuntu (Alpine's kernel has no AppArmor
   or SELinux), `no-new-privileges`, a private cgroup namespace on cgroup v2. Nothing here switches them off; a job can (`security_opt`), see `docs/projects.md`.
 * **Nomad's docker plugin:** `allow_caps` is always set (`nomad_docker_default_caps` + `nomad_docker_extra_caps`): it limits what `cap_add` may name, not the capabilities
-  Docker gives every container. Privileged mode is off (nomad's default), `pid_mode = "host"` is refused with it, runtimes are not restricted (the `nvidia` runtime of
-  `cluster_docker_daemon_extra` works as soon as a job asks for it).
+  Docker gives every container. Privileged mode is off (nomad's default), `pid_mode = "host"` is refused with it. `allow_runtimes` lists `runc`, the gVisor runtimes (see below) and the runtimes of
+  `cluster_docker_daemon_extra` (the `nvidia` runtime works as soon as a job asks for it).
 * **`live-restore` is on:** the containers keep running while dockerd is stopped or restarted, so a security update of Docker (unattended-upgrades on Ubuntu,
   the `apk upgrade` cron job on Alpine) or a change of `daemon.json` does not restart the jobs. Nomad's docker driver finds the containers again; the node
   may report the driver as unhealthy for a few seconds. Limits: it does not carry across a major version of Docker (the daemon then has to stop the
   containers), a daemon that stays down for long leaves the containers without log collection (the pipe breaks; docker's log driver, not the container, suffers),
   and it cannot be combined with Swarm (not used here). Switch it off with `cluster_docker_daemon_extra: {live-restore: false}`.
+
+## Containers in gVisor (`cluster_gvisor_*`)
+
+[gVisor](https://gvisor.dev) (`runsc`) runs a container on a user space kernel: its syscalls are answered by that kernel (the "sentry", written in Go), which itself uses only a
+small, seccomp-filtered set of host syscalls. A compromised container (a supply chain attack in an image, an exploited app that faces the internet) has to get through
+two layers before it touches the node's kernel. It costs memory (about 60 MB per sandbox on top of the container), time for process creation and syscalls (a fork heavy loop
+ran about 6 times slower in a quick test on a nested VM; a sequential write was not noticeably slower), and some syscalls and `/proc` files are missing (the list is at gvisor.dev, "Linux compatibility").
+
+**It is the default** (`cluster_gvisor_enabled: true`): every docker task whose config has no `runtime` runs in a sandbox. Trusted, performance sensitive or kernel hungry
+tasks opt out per task with `runtime = "runc"` (`allow_runtimes` always lists it). `cluster_gvisor_default_runtime: runc` turns the default off again (the runtimes stay available
+for `runtime = "runsc-host"`), `cluster_gvisor_enabled: false` removes gVisor from the nodes (the daemon's default is runc again, jobs that name a gVisor runtime fail).
+
+| runtime | what | use it for |
+|---|---|---|
+| `runsc-host` (**default**) | sandbox on the network of its network namespace (`--network=host`: the sockets are the node kernel's, inside Nomad's bridge, the netns of the group). Containers of a group share one loopback, the firewall, the DNS rules and the egress network see the same packets as with runc. `--host-uds=open` lets the sidecar reach Consul's gRPC socket in the allocation directory | everything in `network { mode = "bridge" }` or `"cni/egress"`, i.e. also every group with a Connect sidecar (Authelia, Traefik, step-ca, Outline, ...) |
+| `runsc` | sandbox with its own network stack (the node's kernel sees only ethernet frames on the veth). **One container per network namespace**: the first sandbox takes the interface, a second one in the same namespace gets none | a single task on docker's bridge (`network_mode = "bridge"` in the docker config, no `network` block): the strongest isolation. No Connect |
+| `runc` | docker's default | databases from official images without network access, `vpn` (wireguard needs netlink and the real kernel), dnsmasq (rtnetlink groups), things that read the docker socket or the host's logs (vector), grafana (see below), anything that does not run in gVisor |
+
+What decided which of the platform's own tasks stay on runc: **postgres, loki, prometheus** (data stores, i/o heavy, fed by the cluster), **grafana** (starts hundreds of threads and
+processes, with a 3 vCPU node the start took longer than the health deadline; also VPN-only and behind SSO), **vpn** (wireguard), **dnsmasq** (the two instances), **vector** and
+**docker-proxy** (docker socket, host logs). Everything else runs in a sandbox (slower to start: see the next point): authelia (both), traefik, wstunnel, vpn-renew, step-ca, ntfy, alertmanager, gatus and
+all Envoy sidecars. A job of your own: the same rules (a database from an official image `runtime = "runc"`, the app that talks to the internet in a sandbox).
+
+Things to know:
+
+* **Why the default is `runsc-host` and not the isolation of `runsc`:** Nomad creates a "pause" container per group and joins all tasks to its network namespace (that is how the Connect sidecar
+  and the app share `127.0.0.1`). With a network stack per sandbox every task has its own loopback and only the first one gets the interface. `runsc-host` keeps the kernel's sockets, so
+  *network* attack surface is the kernel's TCP/IP stack behind the sentry's filtered socket calls (like runc, but the container cannot call anything else directly);
+  filesystem, memory management, process and device syscalls are still the sentry's. The sandbox has no `NET_ADMIN` here either (nomad's `allow_caps`).
+* **Slow starts:** processes and syscalls are slower, so big runtimes start slowly. Measured on a 3 vCPU nested VM: a Node app (Outline) needed about 2 minutes to be healthy after a restart and
+  several minutes for its first start with the database migrations. Give such jobs a longer `update { healthy_deadline = "15m" progress_deadline = "20m" }` (the default is 5m / 10m). Also give a task enough
+  `cpu` (a share, not a cap): the first start of Grafana took 10 minutes with `cpu = 300` on a busy node and 35 seconds on an idle one.
+* **`/proc/net/*` is empty** in a `runsc-host` sandbox (`netstat`, `ss` and tools that read it show nothing), and `ip -6 addr` reports the link local address as `scope global` (the smoke test knows).
+* **Tetragon does not see inside a sandbox:** no process exec events (and so none in Loki) for processes of a gVisor container; Tetragon sees the `runsc` processes of the node. Policies
+  that enforce on connect (`block-metadata-service`) still apply to `runsc-host` (the sandbox is killed), because the socket is the node's; they cannot see the traffic of `runsc`'s own stack,
+  which the firewall rejects instead. Containers that need to be watched (or watch) stay on runc.
+* **Resources:** a sandbox needs about 45 MB (sentry) + 15 MB (gofer) plus the shim that runc has too. A Nomad group with a Connect sidecar is three sandboxes (pause, app, Envoy): the
+  memory limits of a task do not include the sentry. A pause container in a sandbox is a waste, but its runtime is the daemon's default and Nomad has no option for it.
+* **Platform:** `systrap` (`cluster_gvisor_platform`, the default of gVisor; works in VMs, no `/dev/kvm` needed). `kvm` was tried on nested virtualization and was somewhat faster for process creation (roughly a third, one coarse test)
+  but is not enabled; on bare metal it is worth a test (`cluster_docker_daemon_extra` can add a runtime with `--platform=kvm`).
+* **Binaries:** `task build` builds `runsc` and its `gvisor-bin/` helpers from source (`binaries/Dockerfile.gvisor`, gVisor's `go` branch: plain Go, no Bazel; the commit is pinned
+  in `.env` as `GVISOR_GO_COMMIT` and checked against the release tag) as a tar per OS family and architecture next to Nomad and Consul. The binaries are static, so the Alpine and the Ubuntu build are
+  functionally the same. They are installed in `/usr/local/lib/gvisor/<version>/` (an old version's directory stays: running sandboxes keep using the `runsc` they started with); `daemon.json` names the version in the path.
+  Updating: new `GVISOR_VERSION` + `GVISOR_GO_COMMIT`, `task build`, `task deploy:ansible`; running containers keep their sandbox until their job is restarted.
+* **Test:** `task smoke` runs `tests/gvisor.nomad.hcl` (one container each for the default, `runc` and `runsc`; the kernel inside, DNS and "no internet").
 
 ## No calls home
 

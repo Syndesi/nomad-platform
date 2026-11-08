@@ -251,6 +251,8 @@ job "monitoring-server" {
       }
 
       config {
+        # runc: a database from an official image without network access (gVisor costs file i/o and syscall time; the threat model is a bug in the app, not the image)
+        runtime         = "runc"
         image           = var.postgres_image
         args            = ["-c", "listen_addresses=127.0.0.1", "-c", "max_connections=50", "-c", "shared_buffers=64MB"]
         cap_drop        = ["ALL"]
@@ -360,6 +362,8 @@ job "monitoring-server" {
       }
 
       config {
+        # runc: a time series store, i/o heavy and fed by the cluster only (see postgres)
+        runtime         = "runc"
         image           = var.loki_image
         args            = ["-config.file=/local/loki.yaml", "-config.expand-env=false"]
         cap_drop        = ["ALL"]
@@ -473,7 +477,9 @@ job "monitoring-server" {
       }
 
       config {
-        image = var.prometheus_image
+        # runc: a time series store, i/o heavy and fed by the cluster only (see postgres)
+        runtime = "runc"
+        image   = var.prometheus_image
         args = [
           "--config.file=/local/prometheus.yml",
           "--storage.tsdb.path=/prometheus",
@@ -704,8 +710,11 @@ job "monitoring-server" {
       }
 
       config {
-        image = var.grafana_image
-        ports = ["grafana"]
+        # runc: grafana starts hundreds of threads and processes (an embedded API server, plugins); under gVisor its start takes more than the health deadline on small nodes.
+        # It is also only reachable over the VPN and behind SSO, i.e. not one of the exposed apps gVisor is for (see cluster_gvisor_* in defaults.yml)
+        runtime = "runc"
+        image   = var.grafana_image
+        ports   = ["grafana"]
         volumes = [
           "local/grafana.ini:/etc/grafana/grafana.ini:ro",
           "local/provisioning:/etc/grafana/provisioning:ro",
@@ -722,7 +731,8 @@ job "monitoring-server" {
       }
 
       resources {
-        cpu    = 300
+        # a share (soft limit), not a cap: grafana may use more while the node is idle. Its first start runs several hundred database migrations and wants about a core
+        cpu    = 1000
         memory = 384
       }
     }

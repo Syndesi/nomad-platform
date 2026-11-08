@@ -117,6 +117,8 @@ EOT
       }
 
       config {
+        # runc: dnsmasq subscribes to rtnetlink multicast groups to follow the interfaces, which gVisor does not implement ("cannot create netlink socket")
+        runtime         = "runc"
         image           = var.dnsmasq_image
         entrypoint      = ["dnsmasq"]
         args            = ["-k", "-C", "/local/dnsmasq.conf"]

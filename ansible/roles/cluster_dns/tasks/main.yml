@@ -22,7 +22,7 @@
 - name: Docker daemon config (dns, logs, live-restore)
   ansible.builtin.copy:
     dest: /etc/docker/daemon.json
-    content: "{{ ({'dns': [cluster_dns_docker_bridge_ip], 'log-driver': 'json-file', 'log-opts': {'max-size': cluster_docker_log_max_size, 'max-file': cluster_docker_log_max_files | string}, 'no-new-privileges': true, 'live-restore': true, 'default-cgroupns-mode': 'private', 'userland-proxy': false, 'default-ulimits': {'nofile': {'Name': 'nofile', 'Hard': cluster_docker_nofile | int, 'Soft': cluster_docker_nofile | int}}} | combine(cluster_docker_daemon_extra, recursive=True)) | to_nice_json }}\n"
+    content: "{{ ({'dns': [cluster_dns_docker_bridge_ip], 'log-driver': 'json-file', 'log-opts': {'max-size': cluster_docker_log_max_size, 'max-file': cluster_docker_log_max_files | string}, 'no-new-privileges': true, 'live-restore': true, 'default-cgroupns-mode': 'private', 'userland-proxy': false, 'default-ulimits': {'nofile': {'Name': 'nofile', 'Hard': cluster_docker_nofile | int, 'Soft': cluster_docker_nofile | int}}} | combine(cluster_gvisor_docker_daemon if cluster_gvisor_enabled | bool else {}, recursive=True) | combine(cluster_docker_daemon_extra, recursive=True)) | to_nice_json }}\n"
     owner: root
     group: root
     mode: "0644"

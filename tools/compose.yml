@@ -36,6 +36,7 @@ services:
       # Versions of the custom binaries (built by `task build`); the playbook installs exactly these.
       NOMAD_VERSION: ${NOMAD_VERSION:?set NOMAD_VERSION in .env}
       CONSUL_VERSION: ${CONSUL_VERSION:?set CONSUL_VERSION in .env}
+      GVISOR_VERSION: ${GVISOR_VERSION:?set GVISOR_VERSION in .env}
       # How the scripts and the tofu tunnel reach a node (%HOST% = the node name); default ssh as the ansible user
       CLUSTER_EXEC: ${CLUSTER_EXEC:-}
     # /etc/passwd of the container: root, nobody and the host user, read-only (the image's own file is not writable by that user)

@@ -128,6 +128,8 @@ job "monitoring-agent" {
       }
 
       config {
+        # runc: this task holds the docker socket of the node, it is host level and must be as trusted as dockerd (not a gVisor candidate)
+        runtime         = "runc"
         image           = var.docker_proxy_image
         cap_drop        = ["ALL"]
         readonly_rootfs = true
@@ -200,6 +202,8 @@ job "monitoring-agent" {
       }
 
       config {
+        # runc: reads the docker socket (through the proxy), /var/log and tetragon's log of the node
+        runtime         = "runc"
         image           = var.image
         args            = ["--config", "/secrets/vector.yaml"]
         cap_drop        = ["ALL"]

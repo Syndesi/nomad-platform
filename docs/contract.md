@@ -10,7 +10,7 @@ Inside the tools container the cluster repo is `/work`, the platform `/work/base
 | Path in the cluster repo | Content |
 |---|---|
 | `Taskfile.yml` | `dotenv: [.env]`, `includes: base: {taskfile: base/tasks/Taskfile.yml, flatten: true, dir: .}` |
-| `.env` | `CLUSTER_NAME`, `COMPOSE_FILE=base/tools/compose.yml[:compose.override.yml]`, `NOMAD_VERSION`, `CONSUL_VERSION`, `TOFU_VERSION`, `ALPINE_VERSION`; optional `CLUSTER_EXEC`, `AGE_KEY_DIR`, `SSH_KEY_DIR`. Do not use `${HOME}` in it (the Taskfile's dotenv does not expand it) |
+| `.env` | `CLUSTER_NAME`, `COMPOSE_FILE=base/tools/compose.yml[:compose.override.yml]`, `NOMAD_VERSION`, `CONSUL_VERSION`, `GVISOR_VERSION`, `GVISOR_GO_COMMIT`, `TOFU_VERSION`, `ALPINE_VERSION`; optional `CLUSTER_EXEC`, `AGE_KEY_DIR`, `SSH_KEY_DIR`. Do not use `${HOME}` in it (the Taskfile's dotenv does not expand it) |
 | `inventory/` | any ansible inventory sources (static files, tofu inventory plugin, ...). Hosts must be in the groups below |
 | `inventory/group_vars/all/*.yml` | the cluster variables (next section) |
 | `inventory/group_vars/all/{secrets,ca}.sops.yml` | made by `task secrets:init` / `task pki:ca`, sops/age encrypted, committed |
@@ -63,7 +63,7 @@ A cluster whose nodes are not routable can add lines to the controller's ssh con
 are renewed once half of this is over), `cluster_nomad_http_port`, `cluster_consul_https_port`, `cluster_traefik_image`,
 `cluster_authelia_image`, `cluster_dns_upstreams_override`, `cluster_node_domain` (default `cluster_domain`; names the nodes in their certificates), `cluster_host_volumes` (per node: `[{name, path, read_only}]`),
 `cluster_ansible_user`, `cluster_ssh_authorized_keys`, `cluster_interface` (per node: the cluster network's interface, default the default route's),
-`cluster_docker_volumes_enabled` (default false), `cluster_docker_daemon_extra`, `cluster_docker_nofile` (1048576), `cluster_log_retention_days` (7), `cluster_consul_task_kv_prefixes` (none),
+`cluster_docker_volumes_enabled` (default false), `cluster_docker_daemon_extra`, `cluster_docker_nofile` (1048576), `cluster_gvisor_enabled` (default true), `cluster_gvisor_default_runtime` (`runsc-host`; `runsc`, `runc`), `cluster_gvisor_platform` (`systrap`), `cluster_log_retention_days` (7), `cluster_consul_task_kv_prefixes` (none),
 `cluster_traefik_wireguard` / `cluster_wireguard_image` (see the README), `cluster_ssh_key_file`, `cluster_ssh_kex`, `cluster_ssh_ciphers`,
 `cluster_ssh_host_key_algorithms`, `cluster_ssh_pubkey_algorithms`, `cluster_ssh_config_extra`, `cluster_reboot_allowed`,
 `authelia_internal_extra_rules` (rules of your own internal apps behind the VPN), `cluster_internal_apps` (`[{name, addr}]`: `https://<name>.<zone>` on the VPN entry point), `authelia_oidc_clients` / `authelia_internal_oidc_clients` (OpenID Connect clients of the public / internal authelia: `{id, name, secret_hash, redirect_uris, mesh_service, require_pkce?, token_auth_method?}`; secrets: `cluster_authelia_oidc_hmac_secret`, `cluster_authelia_oidc_jwks_key`, `task secrets:ensure`), `cluster_internal_zone` (default `<cluster_name>.internal`),

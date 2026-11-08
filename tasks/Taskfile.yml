@@ -26,9 +26,9 @@ tasks:
   # ---- binaries (host side, needs docker) --------------------------------------------------
 
   build:
-    desc: Build nomad + consul from source for alpine and ubuntu into the shared artifacts cache (~/.cache/nomad-platform/artifacts or $ARTIFACTS_DIR; skips existing, FORCE=1 rebuilds)
+    desc: Build nomad, consul and runsc (gVisor) from source for alpine and ubuntu into the shared artifacts cache (~/.cache/nomad-platform/artifacts or $ARTIFACTS_DIR; skips existing, FORCE=1 rebuilds)
     aliases: [build:binaries]
-    deps: [build:nomad:alpine, build:nomad:ubuntu, build:consul:alpine, build:consul:ubuntu]
+    deps: [build:nomad:alpine, build:nomad:ubuntu, build:consul:alpine, build:consul:ubuntu, build:runsc:alpine, build:runsc:ubuntu]
 
   build:nomad:alpine:
     internal: true
@@ -42,6 +42,13 @@ tasks:
   build:consul:ubuntu:
     internal: true
     cmds: ["base/binaries/build.sh consul ubuntu"]
+
+  build:runsc:alpine:
+    internal: true
+    cmds: ["base/binaries/build-runsc.sh alpine"]
+  build:runsc:ubuntu:
+    internal: true
+    cmds: ["base/binaries/build-runsc.sh ubuntu"]
 
   artifacts:
     desc: List the built binaries

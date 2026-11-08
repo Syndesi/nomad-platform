@@ -129,7 +129,7 @@ Several nodes need a real private network between them (provider VLAN, WireGuard
 ## 4. Deploy
 
 ```sh
-task build                # nomad + consul from source, once (slow), cached in ARTIFACTS_DIR
+task build                # nomad, consul and runsc (gVisor) from source, once (slow), cached in ARTIFACTS_DIR
 task deploy:ansible       # configures the nodes: about 2 minutes for one node, 5 for three
 task smoke                # checks everything from the outside: cluster, ingress and login, tls, dns, firewall, ssh
 git add -A && git commit  # states and encrypted secrets

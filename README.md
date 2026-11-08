@@ -20,7 +20,7 @@ Four services on every cluster:
 
 Everything that touches a node is Ansible over ssh; the objects inside the cluster (ACL policies, identity) are OpenTofu with an
 encrypted state. All tooling runs in one container per cluster, so the machine you work from needs only `docker`, `git` and
-[`task`](https://taskfile.dev). Nomad and Consul are built from source once (`task build`) into a cache shared by all clusters.
+[`task`](https://taskfile.dev). Nomad, Consul and gVisor's `runsc` are built from source once (`task build`) into a cache shared by all clusters. Docker containers run in a gVisor sandbox unless a job opts out (`runtime = "runc"`, `docs/reference.md`).
 
 ## The repos
 
