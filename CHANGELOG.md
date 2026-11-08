@@ -11,6 +11,8 @@ Notable changes per version. Older history is in git.
   docker-socket tasks of the monitoring agent stay on runc; everything else, Envoy sidecars included, runs in a sandbox. Costs and limits (memory, process creation, `/proc/net`, Tetragon
   does not see into sandboxes) are in the reference. Jobs of your own run in gVisor with the next `nomad job run`; give databases `runtime = "runc"`. `cluster_gvisor_default_runtime: runc` keeps the old behaviour for jobs
   without a `runtime`. `task smoke` gets the section "docker runtimes".
+- **Envoy sidecars on runc, new task sizes, memory oversubscription:** every `connect` block of the platform has `sidecar_task { config { runtime = "runc" } }`; tasks have `cpu` of 100 / 500 / 1000 MHz (Envoy 100),
+  `memory` of 128 to 512 MB and `memory_max` of 256 to 1024 MB; tofu-nomad enables Nomad's memory oversubscription (`nomad_scheduler_config`). Run `task deploy:ansible` and restart the jobs.
 - **OpenID Connect for your own apps**: both authelias can be the provider (`authelia_oidc_clients` public, `authelia_internal_oidc_clients` behind the VPN;
   client options `require_pkce`, `token_auth_method`). An app with a client gets a Consul mesh sidecar to `auth.<domain>` / `auth.<zone>` on port 443 (`mesh_service`;
   intentions by tofu-consul, the name resolves to the allocation's loopback via the node's restricted dnsmasq, the certificates carry the names), so the token

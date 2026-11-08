@@ -200,6 +200,15 @@ resource "nomad_acl_token" "ops" {
   type = "management"
 }
 
+# ---- scheduler ---------------------------------------------------------------------------------------------------------------------
+# Memory oversubscription: a task reserves `memory` (what the scheduler counts) and may grow up to `memory_max` (the hard limit of its cgroup) while the node has
+# RAM to spare. The jobs of the platform reserve little and cap higher; a node under memory pressure OOM-kills a task above its reservation first. Nomad's
+# default is off. The algorithm stays binpack (the default).
+resource "nomad_scheduler_config" "this" {
+  scheduler_algorithm             = "binpack"
+  memory_oversubscription_enabled = true
+}
+
 # ---- nomad variables: job config and secrets (the jobs themselves are run with `nomad job run`) ----
 
 resource "nomad_variable" "authelia" {

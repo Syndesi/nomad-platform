@@ -163,6 +163,17 @@ job "monitoring-server" {
       tags     = []
       connect {
         sidecar_service {}
+        # runc: envoy is the network heavy part and a hardened, well audited image; the app stays in gVisor (cluster_gvisor_*)
+        sidecar_task {
+          # default of nomad is 250 MHz; the ingress node is booked out otherwise
+          resources {
+            cpu    = 100
+            memory = 128
+          }
+          config {
+            runtime = "runc"
+          }
+        }
       }
     }
     service {
@@ -172,6 +183,17 @@ job "monitoring-server" {
       tags     = []
       connect {
         sidecar_service {}
+        # runc: envoy is the network heavy part and a hardened, well audited image; the app stays in gVisor (cluster_gvisor_*)
+        sidecar_task {
+          # default of nomad is 250 MHz; the ingress node is booked out otherwise
+          resources {
+            cpu    = 100
+            memory = 128
+          }
+          config {
+            runtime = "runc"
+          }
+        }
       }
     }
 
@@ -203,6 +225,17 @@ job "monitoring-server" {
               destination_name = "authelia-internal-mesh"
               local_bind_port  = 443
             }
+          }
+        }
+        # runc: envoy is the network heavy part and a hardened, well audited image; the app stays in gVisor (cluster_gvisor_*)
+        sidecar_task {
+          # default of nomad is 250 MHz; the ingress node is booked out otherwise
+          resources {
+            cpu    = 100
+            memory = 128
+          }
+          config {
+            runtime = "runc"
           }
         }
       }
@@ -274,8 +307,9 @@ job "monitoring-server" {
       }
 
       resources {
-        cpu    = 200
-        memory = 256
+        cpu        = 500
+        memory     = 256
+        memory_max = 512
       }
     }
 
@@ -378,8 +412,9 @@ job "monitoring-server" {
       }
 
       resources {
-        cpu    = 500
-        memory = 768
+        cpu        = 500
+        memory     = 256
+        memory_max = 1024
       }
     }
 
@@ -500,8 +535,9 @@ job "monitoring-server" {
       }
 
       resources {
-        cpu    = 500
-        memory = 768
+        cpu        = 500
+        memory     = 256
+        memory_max = 1024
       }
     }
 
@@ -569,8 +605,9 @@ job "monitoring-server" {
       }
 
       resources {
-        cpu    = 100
-        memory = 96
+        cpu        = 100
+        memory     = 128
+        memory_max = 256
       }
     }
 
@@ -732,8 +769,9 @@ job "monitoring-server" {
 
       resources {
         # a share (soft limit), not a cap: grafana may use more while the node is idle. Its first start runs several hundred database migrations and wants about a core
-        cpu    = 1000
-        memory = 384
+        cpu        = 1000
+        memory     = 256
+        memory_max = 1024
       }
     }
 
@@ -835,8 +873,9 @@ job "monitoring-server" {
       }
 
       resources {
-        cpu    = 100
-        memory = 96
+        cpu        = 100
+        memory     = 128
+        memory_max = 256
       }
     }
   }

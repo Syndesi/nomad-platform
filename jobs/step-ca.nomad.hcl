@@ -80,6 +80,17 @@ job "step-ca" {
 
       connect {
         sidecar_service {}
+        # runc: envoy is the network heavy part and a hardened, well audited image; the app stays in gVisor (cluster_gvisor_*)
+        sidecar_task {
+          # default of nomad is 250 MHz; the ingress node is booked out otherwise
+          resources {
+            cpu    = 100
+            memory = 128
+          }
+          config {
+            runtime = "runc"
+          }
+        }
       }
 
       # step-ca answers on 127.0.0.1 only: the check runs inside the task
@@ -128,8 +139,9 @@ EOT
       }
 
       resources {
-        cpu    = 50
-        memory = 32
+        cpu        = 100
+        memory     = 128
+        memory_max = 256
       }
     }
 
@@ -210,8 +222,9 @@ EOT
       }
 
       resources {
-        cpu    = 200
-        memory = 192
+        cpu        = 500
+        memory     = 256
+        memory_max = 512
       }
     }
   }

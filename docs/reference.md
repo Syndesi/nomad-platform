@@ -230,8 +230,10 @@ for `runtime = "runsc-host"`), `cluster_gvisor_enabled: false` removes gVisor fr
 
 What decided which of the platform's own tasks stay on runc: **postgres, loki, prometheus** (data stores, i/o heavy, fed by the cluster), **grafana** (starts hundreds of threads and
 processes, with a 3 vCPU node the start took longer than the health deadline; also VPN-only and behind SSO), **vpn** (wireguard), **dnsmasq** (the two instances), **vector** and
-**docker-proxy** (docker socket, host logs). Everything else runs in a sandbox (slower to start: see the next point): authelia (both), traefik, wstunnel, vpn-renew, step-ca, ntfy, alertmanager, gatus and
-all Envoy sidecars. A job of your own: the same rules (a database from an official image `runtime = "runc"`, the app that talks to the internet in a sandbox).
+**docker-proxy** (docker socket, host logs). Everything else runs in a sandbox (slower to start: see the next point): authelia (both), traefik, wstunnel, vpn-renew, step-ca, ntfy, alertmanager and gatus.
+**The Envoy sidecars run on runc** (`sidecar_task { config { runtime = "runc" } }` in every `connect` block): Envoy is the network heavy part of a group, the image is hardened and well audited,
+and it only takes mutual TLS connections that pass the Consul intentions. Nomad has no client side setting for this, so a job of your own sets the same block on each service with a sidecar (without it
+the sidecar is a sandbox: works, but slower). The pause container of a group is a sandbox either way (it does nothing). A job of your own: the same rules (a database from an official image `runtime = "runc"`, the app that talks to the internet in a sandbox).
 
 Things to know:
 
@@ -246,8 +248,13 @@ Things to know:
 * **Tetragon does not see inside a sandbox:** no process exec events (and so none in Loki) for processes of a gVisor container; Tetragon sees the `runsc` processes of the node. Policies
   that enforce on connect (`block-metadata-service`) still apply to `runsc-host` (the sandbox is killed), because the socket is the node's; they cannot see the traffic of `runsc`'s own stack,
   which the firewall rejects instead. Containers that need to be watched (or watch) stay on runc.
-* **Resources:** a sandbox needs about 45 MB (sentry) + 15 MB (gofer) plus the shim that runc has too. A Nomad group with a Connect sidecar is three sandboxes (pause, app, Envoy): the
+* **Resources:** a sandbox needs about 45 MB (sentry) + 15 MB (gofer) plus the shim that runc has too. A Nomad group with a Connect sidecar is two sandboxes (pause, app; Envoy is on runc): the
   memory limits of a task do not include the sentry. A pause container in a sandbox is a waste, but its runtime is the daemon's default and Nomad has no option for it.
+* **Sizes of the platform's tasks:** `cpu` is 100 (small helpers and Envoy), 500 or 1000 MHz (Grafana; a share: a busy node divides its CPU by these numbers, an idle one lets a task use more; Nomad has no `cpu_max`). The scheduler
+  books these numbers against the node's total, and the 3 vCPU ingress node of the test cluster (9582 MHz) was fully booked with 250 MHz for every helper and every Envoy. `memory` is what the scheduler reserves (128 to 512 MB), `memory_max` the hard limit of the task (256 to 1024 MB). tofu-nomad turns on Nomad's memory oversubscription
+  (`nomad_scheduler_config`), so a task may grow to `memory_max` while the node has RAM, and is OOM-killed first when it does not. The reservations are small on purpose: on the 6 GB nodes of the test
+  cluster all reservations of the ingress node (with 128 MB for each Envoy) already take 5 of the 5.7 GiB Nomad can hand out, and a job that does not fit is not placed (`Dimension "memory" exhausted`).
+  Envoy sidecars have 100 MHz and 128 MB (`sidecar_task { resources }`; Nomad's default is 250 MHz).
 * **Platform:** `systrap` (`cluster_gvisor_platform`, the default of gVisor; works in VMs, no `/dev/kvm` needed). `kvm` was tried on nested virtualization and was somewhat faster for process creation (roughly a third, one coarse test)
   but is not enabled; on bare metal it is worth a test (`cluster_docker_daemon_extra` can add a runtime with `--platform=kvm`).
 * **Binaries:** `task build` builds `runsc` and its `gvisor-bin/` helpers from source (`binaries/Dockerfile.gvisor`, gVisor's `go` branch: plain Go, no Bazel; the commit is pinned

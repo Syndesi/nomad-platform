@@ -143,8 +143,9 @@ job "ntfy" {
       }
 
       resources {
-        cpu    = 100
-        memory = 96
+        cpu        = 100
+        memory     = 128
+        memory_max = 256
       }
     }
   }
