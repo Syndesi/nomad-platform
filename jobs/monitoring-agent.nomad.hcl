@@ -62,6 +62,11 @@ job "monitoring-agent" {
       source    = "monitoring-docker-sock"
       read_only = true
     }
+    volume "var-log" {
+      type      = "host"
+      source    = "monitoring-var-log"
+      read_only = true
+    }
     dynamic "volume" {
       for_each = var.tetragon_log ? ["tetragon"] : []
       labels   = ["tetragon-log"]
@@ -128,6 +133,12 @@ job "monitoring-agent" {
         destination = "/var/run/docker.sock"
         read_only   = true
       }
+      # the system logs of the node (/var/log, read only): nomad, consul, docker, sshd, the kernel; root without capabilities cannot read files of other owners (mode 0640)
+      volume_mount {
+        volume      = "var-log"
+        destination = "/var/log-host"
+        read_only   = true
+      }
       dynamic "volume_mount" {
         for_each = var.tetragon_log ? ["tetragon"] : []
         content {
@@ -156,6 +167,7 @@ job "monitoring-agent" {
         image           = var.image
         args            = ["--config", "/secrets/vector.yaml"]
         cap_drop        = ["ALL"]
+        cap_add         = ["dac_override"]
         readonly_rootfs = true
       }
 

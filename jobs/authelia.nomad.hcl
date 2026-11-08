@@ -49,6 +49,12 @@ variable "tls_fingerprint" {
   type    = string
   default = ""
 }
+# true: the instance is also a mesh service "<name>-mesh" (Consul Connect sidecar), for the jobs that need to reach it under its name without a published port: the
+# group network is then a bridge (the published port stays the same). Used by authelia-internal as the OpenID Connect provider of Grafana (docs/monitoring.md).
+variable "mesh" {
+  type    = bool
+  default = false
+}
 # "" = certs come from the cluster CA (traefik default cert), otherwise name of the ACME resolver
 variable "tls_resolver" {
   type    = string
@@ -68,8 +74,10 @@ job "authelia" {
 
   group "authelia" {
     network {
+      mode = var.mesh ? "bridge" : "host"
       port "http" {
         static = var.port
+        to     = var.mesh ? var.port : 0
       }
     }
 
@@ -107,6 +115,21 @@ job "authelia" {
         path            = "/api/health"
         interval        = "10s"
         timeout         = "3s"
+      }
+    }
+
+    # The mesh identity: the sidecar forwards (mutual TLS between the sidecars) to authelia's own https port in this network namespace. Intentions (tofu-consul):
+    # only the Grafana service may connect.
+    dynamic "service" {
+      for_each = var.mesh ? ["mesh"] : []
+      content {
+        name     = "${var.name}-mesh"
+        port     = var.port
+        provider = "consul"
+        tags     = []
+        connect {
+          sidecar_service {}
+        }
       }
     }
 

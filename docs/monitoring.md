@@ -19,7 +19,7 @@ come with finished dashboards: **no dashboards are deployed**, the data sources 
 
 | What | Where | Reachable by |
 |---|---|---|
-| Grafana | `https://grafana.<zone>` (`<zone>` = `cluster_internal_zone`, `<cluster_name>.internal`) | VPN, people's devices, authelia-internal (second factor) **and** Grafana's own login (user `admin`, see "Login") |
+| Grafana | `https://grafana.<zone>` (`<zone>` = `cluster_internal_zone`, `<cluster_name>.internal`) | VPN, people's devices, authelia-internal (second factor) **and** Grafana's login with authelia-internal (OpenID Connect, "Login") |
 | Status page (Gatus) | `https://status.<zone>` | VPN, people's devices, authelia-internal |
 | ntfy | `https://ntfy.<cluster_domain>` | **public**; ntfy's own accounts (`deny-all` by default) |
 | Loki, Prometheus | inside the monitoring allocation | only the Vector agents, through the Consul mesh |
@@ -40,9 +40,10 @@ the rest you filter at query time (`{job="authelia"} | json | status >= 500`).
 |---|---|
 | `docker` | the stdout / stderr of every container (except Vector's own) |
 | `tetragon` | Tetragon's event log (`job="tetragon"`, `task` = `exec`, `exit`, `kprobe`; `level="warn"` for an enforcement) |
+| `system` | the logs of the node itself, read from `/var/log` (a read-only host volume): `job="nomad"`, `"consul"`, `"docker"` (the daemon) on Alpine, where each writes its own file; `job="system"` with `task` = `messages` (Alpine) or `syslog`, `auth.log` (sshd, sudo; Ubuntu, where rsyslog collects what the services write to the journal and the kernel messages into `syslog`; `kern.log` repeats the kernel lines and is not read). They stay on the node as well (rotation: `cluster_log_retention_days`). The agent reads them as root with `dac_override` (the files belong to other users, mode 0640) on a read-only mount |
 | `platform` | **what happens in the cluster**, from the Nomad and Consul APIs, one JSON line per change (`job="nomad-events"`): `task="node"` (a node joins, goes down, drains, is eligible or not), `allocation` (placed, running, failed, lost, with the task states and their restarts), `deployment` (running, successful, failed), `health` (a Consul check changes its status: passing, warning, critical). Polled every 30 s, so an event is up to 30 s late; after a restart of the agent on the monitoring node the current state is logged once more |
 
-Application logs are not duplicated: the platform's own services (Nomad, Consul, Docker daemon) are not shipped as log files; what matters from them is in the events.
+The platform events are a summary of what changed; the `system` logs are the full text of the platform services. On Ubuntu the lines of Nomad, Consul and Docker are in `syslog` (`{job="system", task="syslog"} |~ "nomad"`).
 
 **Metrics** (Prometheus; Vector scrapes every 30 s and remote-writes, Prometheus only stores and evaluates rules). Every series has `host` (the node) and `job`:
 
@@ -142,11 +143,17 @@ mobile app (server `https://ntfy.<domain>`). The user `alertmanager` can only pu
 
 ## Login
 
-Grafana sits behind authelia-internal (VPN + second factor) and has its own login on top: the user `admin`, password `task secrets:get -- cluster_monitoring_grafana_admin_password`.
-Single sign-on with authelia-internal as OpenID Connect provider is prepared (`cluster_monitoring_oidc_enabled`, the provider and the Grafana client are in the configs) but **off**: it does not
-work yet. Grafana's server-side calls (token, userinfo) reach authelia on the node's address, and authelia derives its issuer from the Host header: a request with the address and port is
-answered with 400, and there is no setting to override it. What is missing is a path for the Grafana allocation to authelia-internal under its name on port 443 (e.g. a Connect upstream on 443
-with `auth.<zone>` mapped to it, which needs a sidecar on authelia-internal). Trusting a forward-auth header instead is not an option: any container reaches Grafana's published port.
+Grafana sits behind authelia-internal (VPN + second factor) and logs in **with it** (OpenID Connect): the browser is sent to
+`auth.<zone>` and comes back as a Grafana user, `GrafanaAdmin` for the Authelia group `admin`, Viewer for everyone else. The emergency way in is Grafana's local
+user `admin` (`https://grafana.<zone>/login?disableAutoLogin=true`, password `cluster_monitoring_grafana_admin_password`).
+
+How the server-side part (token, userinfo) reaches Authelia: Authelia builds its issuer from the `Host` header and answers 400 when it carries a port or is not its name,
+and Grafana's HTTP client drops `:443`. So Grafana calls `https://auth.<zone>/...`: the restricted resolver that containers use (dnsmasq of the node, role `cluster_dns`)
+answers that one name with `127.0.0.1`, the container's own loopback, where the Connect sidecar of the service `monitoring-grafana-mesh` listens on 443 (an upstream
+to the mesh service `authelia-internal-mesh`, mutual TLS; the port exists only in that allocation's network namespace). authelia-internal is a mesh service for this
+(the job `authelia-internal` has a bridge network and a sidecar; the published port 9092, which Traefik and the checks use, is unchanged). The intention
+`authelia-internal-mesh` lets only `monitoring-grafana-mesh` connect. The certificate behind the sidecar is the node's, not one for `auth.<zone>`: Grafana does not verify it
+(`tls_skip_verify_insecure`): the way is loopback and then the mesh. Trusting a forward-auth header instead would not do: any container reaches Grafana's published port.
 
 ## Security notes
 
@@ -155,9 +162,9 @@ with `auth.<zone>` mapped to it, which needs a sidecar on authelia-internal). Tr
 - Nomad's `/v1/metrics` answers **without a token** and every container reaches it, and with `nomad_publish_workload_metrics` it names jobs and tasks and their resource use. This is the price of
   the container metrics; set the variable to `false` (or `cluster_monitoring_enabled: false`) if jobs of third parties run in the cluster that must not see the others' names.
 - Loki and Prometheus are unauthenticated inside their allocation and reachable only through the mesh (Consul intentions: `monitoring-vector` only). Grafana and Gatus publish a port on the cluster
-  network, unauthenticated at that port for Gatus (it only shows status) and with Grafana's own login for Grafana; the *header* of a forward-auth is not trusted anywhere.
+  network, unauthenticated at that port for Gatus (it only shows status) and the OpenID login (authelia-internal) for Grafana; the *header* of a forward-auth is not trusted anywhere.
 - ntfy is public and has its own login; `auth-default-access: deny-all`, no sign-up. Alerts contain host and job names.
-- Grafana's local admin password is `cluster_monitoring_grafana_admin_password`; with the OIDC login off it is the way in.
+- Grafana's local admin password is `cluster_monitoring_grafana_admin_password` (the emergency login, see "Login").
 - The tokens of the agents (Nomad policy `monitoring`: read metrics, nodes, allocations, deployments; Consul policy `monitoring`: read catalog and health) are in the Nomad variable
   `nomad/jobs/monitoring-agent`, written by tofu-nomad; the deployer token cannot read it.
 

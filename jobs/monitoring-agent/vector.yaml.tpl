@@ -21,6 +21,18 @@ sources:
     # a new file starts at the beginning, a known one where it stopped (checkpoints in the data directory)
     read_from: beginning
 [[- end ]]
+  # the system logs of the node (/var/log): alpine writes files per service (nomad, consul, docker), ubuntu has rsyslog's files (syslog holds what the services log to
+  # the journal, and the kernel messages: kern.log has the same ones again, so it is not read; auth.log is not in syslog); they stay on the node (rotated by cluster_logs, cluster_log_retention_days) and are shipped as well
+  system:
+    type: file
+    include:
+      - /var/log-host/nomad.log
+      - /var/log-host/consul.log
+      - /var/log-host/docker.log
+      - /var/log-host/messages
+      - /var/log-host/syslog
+      - /var/log-host/auth.log
+    read_from: end
   vector_metrics:
     type: internal_metrics
     scrape_interval_secs: 30
@@ -128,6 +140,21 @@ transforms:
       if lv == "err" || lv == "fatal" || lv == "critical" || lv == "panic" { lv = "error" }
       if !includes(["debug", "info", "warn", "error"], lv) { lv = "unknown" }
       .level = lv
+  system_logs:
+    type: remap
+    inputs: [system]
+    source: |
+      .host = get_env_var!("NODE_NAME")
+      .source = "system"
+      .namespace = "none"
+      f = replace(string!(.file), "/var/log-host/", "")
+      .task = replace(f, ".log", "")
+      .job = if includes(["nomad", "consul", "docker"], .task) { .task } else { "system" }
+      lm = downcase(string!(.message))
+      .level = "info"
+      if match(lm, r'\b(fatal|panic|error|err|failed|failure)\b') { .level = "error" }
+      else if match(lm, r'\b(warn|warning)\b') { .level = "warn" }
+      else if match(lm, r'\bdebug\b') { .level = "debug" }
 [[- if eq (env "TETRAGON_LOG") "true" ]]
   tetragon_logs:
     type: remap
@@ -269,7 +296,7 @@ transforms:
 sinks:
   loki:
     type: loki
-    inputs: [containers
+    inputs: [containers, system_logs
 [[- if eq (env "TETRAGON_LOG") "true" ]], tetragon_logs[[ end ]]
 [[- if eq (env "MONITORING_NODE") "true" ]], platform[[ end ]]]
     endpoint: http://127.0.0.1:3100

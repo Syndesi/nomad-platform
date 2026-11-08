@@ -360,10 +360,6 @@ cluster_monitoring_title: "{{ cluster_domain }}"
 # the cluster's own Prometheus alert rules: a list of rule groups, as in a Prometheus rule file (`- name: ..., rules: [{alert, expr, for, labels, annotations}]`).
 # Alerts go through the same Alertmanager to ntfy. (Rules in the Grafana ui work too.)
 cluster_monitoring_extra_rules: []
-# Single sign-on of Grafana with authelia-internal (OpenID Connect). OFF: it does not work yet. Grafana's server-side calls (token, userinfo) reach authelia
-# on the node's address, and authelia builds its issuer from the Host header (no port allowed, no override): they are answered with 400. It needs a way for
-# Grafana to reach authelia-internal under its name on port 443 (see docs/monitoring.md, "Login"). Until then: Grafana's own login (user admin).
-cluster_monitoring_oidc_enabled: false
 # public rules the platform adds to authelia_access_rules: ntfy has its own login (the phones cannot answer a forward-auth)
 authelia_platform_public_rules: "{{ [{'domain': 'ntfy.' ~ cluster_domain, 'policy': 'bypass'}] if cluster_monitoring_enabled | bool else [] }}"
 

@@ -146,6 +146,19 @@ resource "consul_config_entry" "monitoring_loki_intentions" {
   })
 }
 
+# authelia-internal as the OpenID Connect provider of Grafana (token and userinfo calls, server to server): only Grafana's mesh service may connect.
+resource "consul_config_entry" "authelia_internal_mesh_intentions" {
+  count = var.monitoring_enabled ? 1 : 0
+  name  = "authelia-internal-mesh"
+  kind  = "service-intentions"
+  config_json = jsonencode({
+    Sources = [
+      { Name = "monitoring-grafana-mesh", Action = "allow", Precedence = 9 },
+      { Name = "*", Action = "deny", Precedence = 1 },
+    ]
+  })
+}
+
 resource "consul_config_entry" "monitoring_prometheus_intentions" {
   count = var.monitoring_enabled ? 1 : 0
   name  = "monitoring-prometheus"

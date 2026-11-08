@@ -67,10 +67,6 @@ variable "authelia_internal_addr" {
 variable "ntfy_addr" {
   type = string
 }
-variable "oidc" {
-  type    = bool
-  default = false
-}
 variable "ntfy_topic" {
   type    = string
   default = "alerts"
@@ -190,6 +186,25 @@ job "monitoring-server" {
         path     = "/api/health"
         interval = "30s"
         timeout  = "5s"
+      }
+    }
+    # Grafana logs in with authelia-internal (OpenID Connect). Authelia builds its issuer from the Host header, which must be its name without a port, so Grafana's
+    # server-side calls (token, userinfo) go to https://auth.<zone>:443: the name points to 127.0.0.1 (the restricted resolver of the nodes, role cluster_dns), where the sidecar listens on 443
+    # (an upstream, mutual TLS to the mesh service of authelia-internal; intentions: only this service). The port exists in this allocation's network namespace only.
+    service {
+      name     = "monitoring-grafana-mesh"
+      port     = "3000"
+      provider = "consul"
+      tags     = []
+      connect {
+        sidecar_service {
+          proxy {
+            upstreams {
+              destination_name = "authelia-internal-mesh"
+              local_bind_port  = 443
+            }
+          }
+        }
       }
     }
     service {
@@ -565,7 +580,6 @@ job "monitoring-server" {
           check_for_plugin_updates = false
           [news]
           news_feed_enabled = false
-          %{if var.oidc~}
           [auth]
           oauth_auto_login = true
           [auth.generic_oauth]
@@ -574,10 +588,11 @@ job "monitoring-server" {
           client_id = grafana
           scopes = openid profile email groups
           auth_url = https://auth.${var.zone}/api/oidc/authorization
-          # the token exchange goes to authelia-internal directly (the zone's names do not resolve in a container)
-          token_url = https://${var.authelia_internal_addr}/api/oidc/token
-          api_url = https://${var.authelia_internal_addr}/api/oidc/userinfo
-          tls_client_ca = /secrets/ca.pem
+          # server-side calls: auth.<zone>:443 is the sidecar of this allocation (see the service monitoring-grafana-mesh). The certificate of authelia is the node's, not
+          # one for this name; the way there is the loopback of this allocation and then the mesh (mutual TLS, intentions), so it is not verified
+          token_url = https://auth.${var.zone}/api/oidc/token
+          api_url = https://auth.${var.zone}/api/oidc/userinfo
+          tls_skip_verify_insecure = true
           use_pkce = true
           login_attribute_path = preferred_username
           name_attribute_path = name
@@ -586,17 +601,10 @@ job "monitoring-server" {
           role_attribute_path = contains(groups[*], 'admin') && 'GrafanaAdmin' || 'Viewer'
           allow_assign_grafana_admin = true
           auto_login = true
-          %{endif~}
           [unified_alerting]
           enabled = true
         EOT
         destination = "local/grafana.ini"
-      }
-      # the cluster CA, to verify authelia's node certificate
-      template {
-        data        = "{{ with nomadVar \"nomad/jobs/monitoring-server\" }}{{ .ca_cert }}{{ end }}"
-        destination = "secrets/ca.pem"
-        perms       = "0644"
       }
       # data sources only (no dashboards: those are made in the ui)
       template {

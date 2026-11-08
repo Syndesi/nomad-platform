@@ -27,6 +27,8 @@ Notable changes per version. Older history is in git.
   (remote write sink), Alertmanager, Grafana with its own PostgreSQL, Gatus (status page, replaces uptime kuma) in one allocation, plus ntfy (`ntfy.<domain>`, public) as the
   notification target. Internal only: `grafana.<zone>` and `status.<zone>` behind the VPN; Loki and Prometheus only through the mesh (intentions). No dashboards.
   Retention: node logs `cluster_log_retention_days` (7), Loki / Prometheus `cluster_monitoring_retention_days` (45). New secrets: `task secrets:ensure`. Grafana's database is in `task backup`.
+  The system logs of the nodes (`/var/log`: Nomad, Consul, Docker, sshd, syslog) are shipped too. Grafana logs in with authelia-internal (OpenID Connect):
+  authelia-internal becomes a mesh service (bridge network, Connect sidecar, same published port) and Grafana reaches it as `auth.<zone>:443` inside its own allocation.
   Nomad now publishes allocation metrics (`nomad_publish_workload_metrics`, readable without a token by any container).
 - **Fix: secrets in containers on systemd nodes.** Nomad's unit had `ProtectKernelModules`, `ProtectKernelLogs` and `ProtectClock`: they put the service in a private mount
   namespace, so the tmpfs of every task's `secrets/` directory was invisible to Docker (empty `/secrets`: templates in `secrets/`, the Envoy bootstrap of Connect sidecars). Removed.

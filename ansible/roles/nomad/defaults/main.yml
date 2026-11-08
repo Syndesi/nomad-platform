@@ -64,7 +64,8 @@ nomad_host_volumes: >-
      + ([{'name': 'step-ca', 'path': cluster_stepca_dir, 'read_only': false}] if nomad_stepca_enabled | bool else [])
      + (nomad_monitoring_volumes if nomad_monitoring_enabled | bool else [])
      + ([{'name': 'monitoring-vector', 'path': cluster_monitoring_dir ~ '/vector', 'read_only': false},
-         {'name': 'monitoring-docker-sock', 'path': '/var/run/docker.sock', 'read_only': true, 'external': true}]
+         {'name': 'monitoring-docker-sock', 'path': '/var/run/docker.sock', 'read_only': true, 'external': true},
+         {'name': 'monitoring-var-log', 'path': '/var/log', 'read_only': true, 'external': true}]
         + ([{'name': 'monitoring-tetragon-log', 'path': cluster_tetragon_log_dir, 'read_only': true, 'external': true}] if cluster_tetragon_enabled | bool else [])
         if cluster_monitoring_enabled | bool and nomad_is_client else [])
      + (cluster_host_volumes | default([])) }}

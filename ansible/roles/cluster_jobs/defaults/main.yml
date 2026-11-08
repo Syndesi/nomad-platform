@@ -39,6 +39,7 @@ cluster_jobs_list:
       port: "{{ cluster_authelia_internal_port }}"
       data_volume: authelia-internal
       tls_volume: authelia-internal-tls
+      mesh: "{{ cluster_monitoring_enabled | bool }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia-internal') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
   # step-ca before traefik: traefik's ACME client (resolver stepca) asks it for the certificates of the internal names when it starts
   - name: step-ca
@@ -106,7 +107,6 @@ cluster_jobs_list:
       authelia_internal_addr: "{{ hostvars[cluster_authelia_hosts[0]].cluster_ip }}:{{ cluster_authelia_internal_port }}"
       ntfy_addr: "{{ hostvars[cluster_monitoring_node].cluster_ip }}:{{ cluster_monitoring_ntfy_port }}"
       ntfy_topic: "{{ cluster_monitoring_ntfy_topic }}"
-      oidc: "{{ cluster_monitoring_oidc_enabled | bool }}"
       extra_rules: "{{ ({'groups': cluster_monitoring_extra_rules} | to_json) if cluster_monitoring_extra_rules else '' }}"
   - name: monitoring-agent
     templates: true
@@ -147,8 +147,8 @@ cluster_jobs_authelia_instances:
     jwt_secret: "{{ cluster_authelia_internal_reset_password_jwt_secret }}"
     totp_seeds: "{{ authelia_internal_totp_seeds | default({}) }}"
     var_prefix: authelia_internal
-    # the OpenID Connect provider (off by default, see cluster_monitoring_oidc_enabled): Grafana logs in with the accounts of authelia-internal (clients: id, secret hash, redirect uri)
+    # the OpenID Connect provider (with the monitoring stack): Grafana logs in with the accounts of authelia-internal (clients: id, secret hash, redirect uri)
     oidc: "{{ {'hmac_secret': cluster_authelia_internal_oidc_hmac_secret,
                'jwks_key': cluster_authelia_internal_oidc_jwks_key,
                'clients': [{'id': 'grafana', 'name': 'Grafana', 'secret_hash': cluster_monitoring_oidc_client_secret_hash,
-                            'redirect_uris': ['https://grafana.' ~ cluster_internal_zone ~ '/login/generic_oauth']}]} if cluster_monitoring_enabled | bool and cluster_monitoring_oidc_enabled | bool else {} }}"
+                            'redirect_uris': ['https://grafana.' ~ cluster_internal_zone ~ '/login/generic_oauth']}]} if cluster_monitoring_enabled | bool else {} }}"

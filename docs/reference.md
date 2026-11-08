@@ -168,6 +168,15 @@ Nomad and Consul agent certificates **never** come from step-ca (an expired one 
 * Envoy (BoringSSL) cannot verify a chain with IP name constraints and an IP in the leaf, so Consul's gRPC listener has its own certificate
   without IP addresses (`consul-grpc`). `cluster_stepca_enabled: false` keeps the interim wildcard from the ansible intermediate.
 
+## Nomad's systemd unit: which hardening is NOT used, and why
+
+Nomad (and only Nomad) runs without `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectClock` and every other `Protect*` option, on purpose. They make systemd start the
+service in a **private mount namespace**. Nomad mounts a tmpfs for the `secrets/` directory of every task; in the private namespace that mount is invisible to
+dockerd, so the container sees an empty `/secrets`. Consequences: templates written to `secrets/` (tokens, certificates) and the Envoy bootstrap of every Consul
+Connect sidecar (`secrets/envoy_bootstrap.json`) do not exist, and the task fails to start. Alpine (OpenRC) is not affected, which is why it can go unnoticed. The unit keeps
+`NoNewPrivileges`, `RestrictRealtime`, `LockPersonality` and `SystemCallArchitectures`. Consul's unit does not mount anything for others and keeps its `Protect*` options.
+Do not add them back (the comment in `ansible/roles/nomad/tasks/main.yml` says the same).
+
 ## Docker, volumes, logs
 
 * Jobs cannot bind-mount arbitrary host paths (`cluster_docker_volumes_enabled: false`). Declare per node
@@ -282,7 +291,7 @@ Do not edit anything below `base/`: change the platform in its own repo and move
 
 Logs, metrics, alerts and a status page on every cluster by default: `docs/monitoring.md` (architecture, collected data, custom metric endpoints with Consul tags,
 retention, a primer on what Alertmanager needs). Variables: `cluster_monitoring_enabled`, `cluster_monitoring_node` (default: the server node, if it is a client),
-`cluster_monitoring_retention_days` (45), `cluster_monitoring_dir`, the `*_image` tags, `cluster_monitoring_extra_rules`, `cluster_monitoring_oidc_enabled` (off, see the document).
+`cluster_monitoring_retention_days` (45), `cluster_monitoring_dir`, the `*_image` tags, `cluster_monitoring_extra_rules`.
 
 ## Open ideas (not implemented)
 

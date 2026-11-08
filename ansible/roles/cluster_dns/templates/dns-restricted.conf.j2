@@ -6,5 +6,11 @@ no-resolv
 # that gets REFUSED for the AAAA of a known name may fail the whole lookup
 local=/#/
 server=/consul/127.0.0.1#{{ cluster_dns_consul_port }}
+{% if cluster_monitoring_enabled | bool %}
+# The OpenID Connect provider of Grafana (authelia-internal, docs/monitoring.md "Login"): a container's own loopback. Grafana's allocation has a mesh sidecar there on
+# port 443 (an upstream to authelia-internal); in every other container the name leads nowhere (it did not resolve before).
+# (host-record, not address=: address= answers NXDOMAIN for the AAAA query, and musl then fails the whole lookup)
+host-record=auth.{{ cluster_internal_zone }},127.0.0.1
+{% endif %}
 listen-address={{ cluster_dns_docker_bridge_ip }}
 bind-dynamic
