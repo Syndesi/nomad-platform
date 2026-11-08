@@ -407,6 +407,8 @@
           nodes: "{{ (groups['cluster_servers'] + groups['cluster_clients']) | unique }}"
           stepca_enabled: "{{ cluster_stepca_enabled | bool }}"
           monitoring_enabled: "{{ cluster_monitoring_enabled | bool }}"
+          oidc_mesh_services: "{{ cluster_authelia_oidc_clients | map(attribute='mesh_service') | list }}"
+          oidc_mesh_services_public: "{{ cluster_authelia_oidc_clients_public | map(attribute='mesh_service') | list }}"
           projects: "{{ cluster_projects }}"
 
 # The agent tokens exist now: servers write them into their config (a restart only if it changed),

@@ -29,6 +29,7 @@ cluster_jobs_list:
     vars:
       image: "{{ cluster_authelia_image }}"
       user: "{{ cluster_authelia_uid | string if cluster_authelia_uid | int != 0 else '' }}"
+      mesh: "{{ cluster_authelia_oidc_clients_public | length > 0 }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
   - name: authelia-internal
     file: authelia
@@ -39,7 +40,7 @@ cluster_jobs_list:
       port: "{{ cluster_authelia_internal_port }}"
       data_volume: authelia-internal
       tls_volume: authelia-internal-tls
-      mesh: "{{ cluster_monitoring_enabled | bool }}"
+      mesh: "{{ cluster_authelia_oidc_clients | length > 0 }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia-internal') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
   # step-ca before traefik: traefik's ACME client (resolver stepca) asks it for the certificates of the internal names when it starts
   - name: step-ca
@@ -81,6 +82,7 @@ cluster_jobs_list:
       metrics_port: "{{ cluster_traefik_metrics_port if cluster_traefik_metrics | bool else 0 }}"
       grafana_addr: "{{ hostvars[cluster_monitoring_node].cluster_ip ~ ':' ~ cluster_monitoring_grafana_port if cluster_monitoring_enabled | bool else '' }}"
       gatus_addr: "{{ hostvars[cluster_monitoring_node].cluster_ip ~ ':' ~ cluster_monitoring_gatus_port if cluster_monitoring_enabled | bool else '' }}"
+      internal_apps: "{{ cluster_internal_apps | to_json }}"
       acme_server: "{{ cluster_acme_server }}"
       acme_email: "{{ cluster_acme_email }}"
   # the monitoring stack (cluster_monitoring_enabled): ntfy first (alerts go there), the server (Loki / Prometheus), then the agents that write to it
@@ -113,6 +115,7 @@ cluster_jobs_list:
     vars:
       templates_dir: "{{ cluster_jobs_remote_dir }}/monitoring-agent"
       image: "{{ cluster_monitoring_vector_image }}"
+      docker_proxy_image: "{{ cluster_monitoring_docker_proxy_image }}"
       nomad_port: "{{ cluster_nomad_http_port }}"
       consul_port: "{{ cluster_consul_https_port }}"
       tetragon_port: "{{ cluster_tetragon_metrics_port if cluster_tetragon_enabled | bool else 0 }}"
@@ -137,6 +140,10 @@ cluster_jobs_authelia_instances:
     jwt_secret: "{{ cluster_authelia_reset_password_jwt_secret }}"
     totp_seeds: "{{ authelia_totp_seeds | default({}) }}"
     var_prefix: authelia
+    # the OpenID Connect provider for public apps (authelia_oidc_clients, only when there are any)
+    oidc: "{{ {'hmac_secret': cluster_authelia_oidc_hmac_secret,
+               'jwks_key': cluster_authelia_oidc_jwks_key,
+               'clients': cluster_authelia_oidc_clients_public} if cluster_authelia_oidc_clients_public | length > 0 else {} }}"
   - name: authelia-internal
     port: "{{ cluster_authelia_internal_port }}"
     domain: "{{ cluster_internal_zone }}"
@@ -150,5 +157,4 @@ cluster_jobs_authelia_instances:
     # the OpenID Connect provider (with the monitoring stack): Grafana logs in with the accounts of authelia-internal (clients: id, secret hash, redirect uri)
     oidc: "{{ {'hmac_secret': cluster_authelia_internal_oidc_hmac_secret,
                'jwks_key': cluster_authelia_internal_oidc_jwks_key,
-               'clients': [{'id': 'grafana', 'name': 'Grafana', 'secret_hash': cluster_monitoring_oidc_client_secret_hash,
-                            'redirect_uris': ['https://grafana.' ~ cluster_internal_zone ~ '/login/generic_oauth']}]} if cluster_monitoring_enabled | bool else {} }}"
+               'clients': cluster_authelia_oidc_clients} if cluster_authelia_oidc_clients | length > 0 else {} }}"

@@ -96,6 +96,11 @@ variable "gatus_addr" {
   type    = string
   default = ""
 }
+# the cluster's own internal apps, json: [{"name": "docs", "addr": "<host>:<port>"}] -> https://<name>.<zone> on the entry point vpn (cluster_internal_apps)
+variable "internal_apps" {
+  type    = string
+  default = "[]"
+}
 variable "vpn_admin_net" {
   type        = string
   description = "CIDR of the VPN addresses of people's devices: the only sources of the ops UIs (nomad., consul., traefik.<zone>)"
@@ -649,6 +654,7 @@ EOT
         TPL_VPN_PORT               = var.vpn_entrypoint_port
         TPL_GRAFANA_ADDR           = var.grafana_addr
         TPL_GATUS_ADDR             = var.gatus_addr
+        TPL_INTERNAL_APPS          = var.internal_apps
         TPL_VPN_ADMIN_NET          = var.vpn_admin_net
         TPL_VPN_PROJECT_NET        = var.vpn_project_net
         TPL_WSTUNNEL_PORT          = var.vpn_wstunnel_port

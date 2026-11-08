@@ -4,6 +4,11 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- **OpenID Connect for your own apps**: both authelias can be the provider (`authelia_oidc_clients` public, `authelia_internal_oidc_clients` behind the VPN;
+  client options `require_pkce`, `token_auth_method`). An app with a client gets a Consul mesh sidecar to `auth.<domain>` / `auth.<zone>` on port 443 (`mesh_service`;
+  intentions by tofu-consul, the name resolves to the allocation's loopback via the node's restricted dnsmasq, the certificates carry the names), so the token
+  and userinfo calls need neither `extra_hosts` nor skipped verification. Grafana now verifies the certificate. `cluster_internal_apps` adds internal routers.
+  New secrets `cluster_authelia_oidc_hmac_secret` / `cluster_authelia_oidc_jwks_key` (`task secrets:ensure`).
 - **Projects** (`cluster_projects`, `docs/projects.md`): scoped access for CI and third party apps. Each project gets a Nomad namespace, a policy limited to it
   and a token (tofu-nomad, output `project_tokens`), optionally a Consul token (`consul_rules`, tofu-consul), and a VPN device. The global tokens are unchanged.
   New: `task projects`, `task project:vpn|token|export|rotate|revoke`, `scripts/project.sh`. `project:export` writes a tar, age encrypted to a recipient
@@ -22,6 +27,9 @@ Notable changes per version. Older history is in git.
 - **Tetragon** (role `tetragon`, `docs/reference.md` "Runtime security"): eBPF runtime security on every node, from the pinned static release (same files on Alpine and
   Ubuntu). Json event log, Prometheus metrics on the node's cluster address (port 2112, firewall: cluster subnets), shipped policy presets
   (`cluster_tetragon_presets`: `network-connect`, `block-metadata-service` which enforces); quiet filters on by default (`cluster_tetragon_quiet_runtime|quiet_deploys|slim_events`: container plumbing, the ansible user's deploys except sudo, capability/namespace fields), no `binary` metric label and the cluster repo's `tetragon.d/*.yaml`. Off with `cluster_tetragon_enabled: false`.
+- **Hardening:** the docker socket of the monitoring agent is behind a filtering proxy (task `docker-proxy`, GET of containers / events only; vector has no socket);
+  the monitoring server's tasks run with `cap_drop ALL` and a read-only root filesystem; `block-metadata-service` also blocks `fd00:ec2::254` (IPv6); the Consul
+  token of the Nomad agents has `intentions = "read"` (a leaked token could not allow itself into a service). Apply with `task deploy:tofu` / `deploy:ansible`.
 - **Monitoring** (`docs/monitoring.md`, `cluster_monitoring_enabled`, on by default): Vector on every client (docker logs, Tetragon events, cluster events polled from Nomad and
   Consul, metrics of Nomad / Consul / Tetragon and of every Consul service tagged `metrics`), and on one node (`cluster_monitoring_node`) Loki, Prometheus
   (remote write sink), Alertmanager, Grafana with its own PostgreSQL, Gatus (status page, replaces uptime kuma) in one allocation, plus ntfy (`ntfy.<domain>`, public) as the

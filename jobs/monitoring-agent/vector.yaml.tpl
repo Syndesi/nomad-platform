@@ -12,6 +12,8 @@ sources:
   # ---- logs ----------------------------------------------------------------------------------------------------------------------------------
   docker:
     type: docker_logs
+    # not the socket: the proxy task of this group (GET containers / events only), on the loopback of the group network
+    docker_host: tcp://127.0.0.1:2375
     # not this agent's own output (a loop when something is wrong with it)
     exclude_containers: ["vector-"]
 [[- if eq (env "TETRAGON_LOG") "true" ]]

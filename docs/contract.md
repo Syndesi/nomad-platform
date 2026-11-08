@@ -66,7 +66,7 @@ are renewed once half of this is over), `cluster_nomad_http_port`, `cluster_cons
 `cluster_docker_volumes_enabled` (default false), `cluster_docker_daemon_extra`, `cluster_docker_nofile` (1048576), `cluster_log_retention_days` (7), `cluster_consul_task_kv_prefixes` (none),
 `cluster_traefik_wireguard` / `cluster_wireguard_image` (see the README), `cluster_ssh_key_file`, `cluster_ssh_kex`, `cluster_ssh_ciphers`,
 `cluster_ssh_host_key_algorithms`, `cluster_ssh_pubkey_algorithms`, `cluster_ssh_config_extra`, `cluster_reboot_allowed`,
-`authelia_internal_extra_rules` (rules of your own internal apps behind the VPN), `cluster_internal_zone` (default `<cluster_name>.internal`),
+`authelia_internal_extra_rules` (rules of your own internal apps behind the VPN), `cluster_internal_apps` (`[{name, addr}]`: `https://<name>.<zone>` on the VPN entry point), `authelia_oidc_clients` / `authelia_internal_oidc_clients` (OpenID Connect clients of the public / internal authelia: `{id, name, secret_hash, redirect_uris, mesh_service, require_pkce?, token_auth_method?}`; secrets: `cluster_authelia_oidc_hmac_secret`, `cluster_authelia_oidc_jwks_key`, `task secrets:ensure`), `cluster_internal_zone` (default `<cluster_name>.internal`),
 `cluster_vpn_subnet` (a `x.y.z.0/24`, distinct per cluster), `cluster_vpn_*` (host, ports, MTU, client certificate lifetime, `cluster_vpn_project_first`), `cluster_projects` (`docs/projects.md`), `cluster_stepca_enabled` (default true) and
 `cluster_stepca_*`, `authelia_internal_totp_seeds`, and the role defaults (`nomad_*`, `consul_*`). Inventory sources are merged in order (`ansible.cfg`: base first, cluster
 second), so the cluster wins. Paths follow a fixed layout below `cluster_dir` (the cluster repo as the tools container

@@ -32,6 +32,18 @@ variable "stepca_enabled" {
   default     = false
 }
 
+variable "oidc_mesh_services" {
+  description = "mesh services of the apps that log in with authelia-internal (OpenID Connect): the only sources its mesh service lets connect"
+  type        = list(string)
+  default     = []
+}
+
+variable "oidc_mesh_services_public" {
+  description = "the same for the public authelia (authelia-mesh)"
+  type        = list(string)
+  default     = []
+}
+
 variable "monitoring_enabled" {
   description = "the monitoring stack runs: the intentions that let only the agents' service reach Loki and Prometheus"
   type        = bool

@@ -100,8 +100,11 @@ identity_providers:
         authorization_policy: two_factor
         # first party and behind a second factor already: no consent page
         consent_mode: implicit
-        require_pkce: true
+        # PKCE unless the client sets require_pkce: false (apps whose OpenID Connect library does not send it, e.g. Outline)
+        require_pkce: {{ (c.require_pkce | default(true)) | to_json }}
+{% if c.require_pkce | default(true) %}
         pkce_challenge_method: S256
+{% endif %}
         redirect_uris:
 {% for u in c.redirect_uris %}
           - {{ u | to_json }}
@@ -109,7 +112,7 @@ identity_providers:
         scopes: [openid, profile, email, groups]
         response_types: [code]
         grant_types: [authorization_code]
-        token_endpoint_auth_method: client_secret_basic
+        token_endpoint_auth_method: {{ (c.token_auth_method | default('client_secret_basic')) | to_json }}
 {% endfor %}
 {% endif %}
 authentication_backend:

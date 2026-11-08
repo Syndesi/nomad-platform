@@ -313,7 +313,7 @@ cluster_tetragon_metrics_port: 2112
 cluster_tetragon_log_dir: /var/log/tetragon
 cluster_tetragon_log_max_size_mb: 50
 cluster_tetragon_log_max_backups: 7
-# shipped policies: block-metadata-service (ENFORCE, on by default: kills a container process that connects to 169.254.169.254, the metadata service of
+# shipped policies: block-metadata-service (ENFORCE, on by default: kills a container process that connects to 169.254.169.254 or fd00:ec2::254, the metadata service of
 # cloud providers), network-connect (observe: tcp connections of container processes; chatty, add it when you want to look)
 cluster_tetragon_presets: [block-metadata-service]
 # less noise in the event log (all of them can be switched off):
@@ -354,12 +354,33 @@ cluster_monitoring_alertmanager_image: prom/alertmanager:v0.34.2
 cluster_monitoring_grafana_image: grafana/grafana:13.3.0
 cluster_monitoring_gatus_image: twinproduction/gatus:v5.38.0
 cluster_monitoring_vector_image: timberio/vector:0.61.0-alpine
+# Filtering proxy in front of the docker socket (monitoring agent): vector gets GET on the container list / inspect / logs / events only
+cluster_monitoring_docker_proxy_image: wollomatic/socket-proxy:1.13.1
 cluster_monitoring_ntfy_image: binwiederhier/ntfy:v2.37.2
 # the name in the status page
 cluster_monitoring_title: "{{ cluster_domain }}"
 # the cluster's own Prometheus alert rules: a list of rule groups, as in a Prometheus rule file (`- name: ..., rules: [{alert, expr, for, labels, annotations}]`).
 # Alerts go through the same Alertmanager to ntfy. (Rules in the Grafana ui work too.)
 cluster_monitoring_extra_rules: []
+
+# --- apps behind the VPN, with single sign-on (authelia-internal as OpenID Connect provider) -----------------------------------------------------------------
+# The cluster's own internal apps (the repo of the cluster, docs/reference.md "Internal services"):
+#   cluster_internal_apps:            [{name: docs, addr: "10.0.0.5:3000"}]   -> https://docs.<zone> on the VPN entry point, behind authelia-internal (the rule: authelia_internal_extra_rules)
+#   authelia_internal_oidc_clients:   [{id, name, secret_hash, redirect_uris, mesh_service}]   -> OpenID Connect clients of authelia-internal (the VPN's accounts)
+#   authelia_oidc_clients:            the same for the PUBLIC authelia (auth.<cluster_domain>): public apps that log in with it, e.g. outline at docs.<cluster_domain>
+#                                     (the app needs an access rule with `policy: bypass` in authelia_access_rules if it does its own login, which it does with this)
+# require_pkce (default true): false for apps whose OpenID Connect library does not send PKCE (Outline).
+# token_auth_method (default client_secret_basic): client_secret_post for apps that send the secret in the request body (Outline).
+# mesh_service: the Consul service of the app's job that has the sidecar with the upstream `authelia-internal-mesh` on 443 (see docs/reference.md); only these may connect.
+cluster_internal_apps: []
+authelia_internal_oidc_clients: []
+authelia_oidc_clients: []
+# all clients per instance: Grafana's (with monitoring) and the cluster's. No client = no OpenID Connect provider, the instance stays a plain host-network job.
+cluster_authelia_oidc_clients_public: "{{ authelia_oidc_clients }}"
+cluster_authelia_oidc_clients: >-
+  {{ ([{'id': 'grafana', 'name': 'Grafana', 'secret_hash': cluster_monitoring_oidc_client_secret_hash,
+        'redirect_uris': ['https://grafana.' ~ cluster_internal_zone ~ '/login/generic_oauth'], 'mesh_service': 'monitoring-grafana-mesh'}]
+      if cluster_monitoring_enabled | bool else []) + authelia_internal_oidc_clients }}
 # public rules the platform adds to authelia_access_rules: ntfy has its own login (the phones cannot answer a forward-auth)
 authelia_platform_public_rules: "{{ [{'domain': 'ntfy.' ~ cluster_domain, 'policy': 'bypass'}] if cluster_monitoring_enabled | bool else [] }}"
 

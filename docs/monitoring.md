@@ -157,8 +157,11 @@ to the mesh service `authelia-internal-mesh`, mutual TLS; the port exists only i
 
 ## Security notes
 
-- **The agent is root-equivalent on its node**: it reads the docker socket (a host volume `monitoring-docker-sock`, read only on the file, but the Docker API behind it can do everything) so that it
-  can label the logs. Only the platform's job uses these host volumes; do not hand `monitoring-docker-sock` to a project (`host_volumes` of `cluster_projects`).
+- **The docker socket is behind a filtering proxy**: only the task `docker-proxy` of the agent mounts the host volume `monitoring-docker-sock` (a read-only mount does not limit the
+  API: the socket can still start a privileged container). The proxy (`cluster_monitoring_docker_proxy_image`, no capabilities, read-only root filesystem) lets through `GET` of the container
+  list, inspect, logs, events, version and ping, everything else gets 403; vector (no socket) reaches it on the loopback of the group network. What remains: `inspect` shows the environment of every
+  container, so a compromised vector can read secrets that jobs pass as environment variables (not root on the node). Do not hand `monitoring-docker-sock` to a project (`host_volumes` of `cluster_projects`).
+- The tasks of the monitoring server have no capabilities and a read-only root filesystem (`/tmp` is a small tmpfs, the data is on the host volumes).
 - Nomad's `/v1/metrics` answers **without a token** and every container reaches it, and with `nomad_publish_workload_metrics` it names jobs and tasks and their resource use. This is the price of
   the container metrics; set the variable to `false` (or `cluster_monitoring_enabled: false`) if jobs of third parties run in the cluster that must not see the others' names.
 - Loki and Prometheus are unauthenticated inside their allocation and reachable only through the mesh (Consul intentions: `monitoring-vector` only). Grafana and Gatus publish a port on the cluster

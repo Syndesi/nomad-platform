@@ -246,7 +246,7 @@ what runs in your containers (health check scripts): filter those by binary ther
 
 - `cluster_tetragon_presets`, shipped with the platform (default: `block-metadata-service`):
   - `network-connect` - observe: tcp connections of container processes.
-  - `block-metadata-service` - **enforce**: a container process that connects to 169.254.169.254 is killed with SIGKILL before the connection is made.
+  - `block-metadata-service` - **enforce**: a container process that connects to 169.254.169.254 or `fd00:ec2::254` (IPv4 / IPv6 metadata address) is killed with SIGKILL before the connection is made.
 - the cluster repo's own: `tetragon.d/*.yaml` (jinja allowed; `.yaml.j2` too). Removing a file removes the policy. A policy with `matchActions: Sigkill`
   or `Override` enforces, without it it only reports. Policy reference and examples: tetragon.io/docs/concepts/tracing-policy.
 

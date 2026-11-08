@@ -249,8 +249,24 @@ job "monitoring-server" {
       }
 
       config {
-        image = var.postgres_image
-        args  = ["-c", "listen_addresses=127.0.0.1", "-c", "max_connections=50", "-c", "shared_buffers=64MB"]
+        image           = var.postgres_image
+        args            = ["-c", "listen_addresses=127.0.0.1", "-c", "max_connections=50", "-c", "shared_buffers=64MB"]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+        mount {
+          type   = "tmpfs"
+          target = "/tmp"
+          tmpfs_options {
+            size = 16777216
+          }
+        }
+        mount {
+          type   = "tmpfs"
+          target = "/var/run/postgresql"
+          tmpfs_options {
+            size = 1048576
+          }
+        }
       }
 
       resources {
@@ -342,8 +358,17 @@ job "monitoring-server" {
       }
 
       config {
-        image = var.loki_image
-        args  = ["-config.file=/local/loki.yaml", "-config.expand-env=false"]
+        image           = var.loki_image
+        args            = ["-config.file=/local/loki.yaml", "-config.expand-env=false"]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+        mount {
+          type   = "tmpfs"
+          target = "/tmp"
+          tmpfs_options {
+            size = 33554432
+          }
+        }
       }
 
       resources {
@@ -455,6 +480,15 @@ job "monitoring-server" {
           # vector writes here
           "--web.enable-remote-write-receiver",
         ]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+        mount {
+          type   = "tmpfs"
+          target = "/tmp"
+          tmpfs_options {
+            size = 33554432
+          }
+        }
       }
 
       resources {
@@ -515,6 +549,15 @@ job "monitoring-server" {
           # a single instance: no gossip cluster
           "--cluster.listen-address=",
         ]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+        mount {
+          type   = "tmpfs"
+          target = "/tmp"
+          tmpfs_options {
+            size = 16777216
+          }
+        }
       }
 
       resources {
@@ -588,11 +631,10 @@ job "monitoring-server" {
           client_id = grafana
           scopes = openid profile email groups
           auth_url = https://auth.${var.zone}/api/oidc/authorization
-          # server-side calls: auth.<zone>:443 is the sidecar of this allocation (see the service monitoring-grafana-mesh). The certificate of authelia is the node's, not
-          # one for this name; the way there is the loopback of this allocation and then the mesh (mutual TLS, intentions), so it is not verified
+          # server-side calls: auth.<zone>:443 is the sidecar of this allocation (see the service monitoring-grafana-mesh); authelia-internal's certificate has that name
           token_url = https://auth.${var.zone}/api/oidc/token
           api_url = https://auth.${var.zone}/api/oidc/userinfo
-          tls_skip_verify_insecure = true
+          tls_client_ca = /secrets/ca.pem
           use_pkce = true
           login_attribute_path = preferred_username
           name_attribute_path = name
@@ -605,6 +647,12 @@ job "monitoring-server" {
           enabled = true
         EOT
         destination = "local/grafana.ini"
+      }
+      # the cluster CA, to verify the certificate of authelia-internal
+      template {
+        data        = "{{ with nomadVar \"nomad/jobs/monitoring-server\" }}{{ .ca_cert }}{{ end }}"
+        destination = "secrets/ca.pem"
+        perms       = "0644"
       }
       # data sources only (no dashboards: those are made in the ui)
       template {
@@ -638,6 +686,15 @@ job "monitoring-server" {
           "local/grafana.ini:/etc/grafana/grafana.ini:ro",
           "local/provisioning:/etc/grafana/provisioning:ro",
         ]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+        mount {
+          type   = "tmpfs"
+          target = "/tmp"
+          tmpfs_options {
+            size = 33554432
+          }
+        }
       }
 
       resources {
@@ -729,8 +786,17 @@ job "monitoring-server" {
         destination = "local/config.yaml"
       }
       config {
-        image = var.gatus_image
-        ports = ["gatus"]
+        image           = var.gatus_image
+        ports           = ["gatus"]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+        mount {
+          type   = "tmpfs"
+          target = "/tmp"
+          tmpfs_options {
+            size = 16777216
+          }
+        }
       }
 
       resources {

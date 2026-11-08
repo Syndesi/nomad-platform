@@ -32,10 +32,15 @@ resource "consul_acl_policy" "monitoring" {
 resource "consul_acl_policy" "nomad_agent" {
   name        = "nomad-agent"
   description = "nomad agents register themselves as services"
-  rules       = <<-EOT
+  # In Consul a service rule with write also grants write on that service's intentions unless `intentions` says otherwise: with "read" a token
+  # that leaks from a node cannot allow itself into a service (the intentions are managed by tofu with the ops token).
+  rules = <<-EOT
     agent_prefix "" { policy = "read" }
     node_prefix "" { policy = "read" }
-    service_prefix "" { policy = "write" }
+    service_prefix "" {
+      policy     = "write"
+      intentions = "read"
+    }
   EOT
 }
 
@@ -146,16 +151,29 @@ resource "consul_config_entry" "monitoring_loki_intentions" {
   })
 }
 
-# authelia-internal as the OpenID Connect provider of Grafana (token and userinfo calls, server to server): only Grafana's mesh service may connect.
+# the public authelia as the OpenID Connect provider of public apps: the same, for its mesh service
+resource "consul_config_entry" "authelia_mesh_intentions" {
+  count = length(var.oidc_mesh_services_public) > 0 ? 1 : 0
+  name  = "authelia-mesh"
+  kind  = "service-intentions"
+  config_json = jsonencode({
+    Sources = concat(
+      [for s in var.oidc_mesh_services_public : { Name = s, Action = "allow", Precedence = 9 }],
+      [{ Name = "*", Action = "deny", Precedence = 1 }],
+    )
+  })
+}
+
+# authelia-internal as the OpenID Connect provider (token and userinfo calls, server to server): only the mesh services of the apps that log in with it may connect.
 resource "consul_config_entry" "authelia_internal_mesh_intentions" {
-  count = var.monitoring_enabled ? 1 : 0
+  count = length(var.oidc_mesh_services) > 0 ? 1 : 0
   name  = "authelia-internal-mesh"
   kind  = "service-intentions"
   config_json = jsonencode({
-    Sources = [
-      { Name = "monitoring-grafana-mesh", Action = "allow", Precedence = 9 },
-      { Name = "*", Action = "deny", Precedence = 1 },
-    ]
+    Sources = concat(
+      [for s in var.oidc_mesh_services : { Name = s, Action = "allow", Precedence = 9 }],
+      [{ Name = "*", Action = "deny", Precedence = 1 }],
+    )
   })
 }
 

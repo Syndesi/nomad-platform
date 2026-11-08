@@ -1,5 +1,5 @@
 # The monitoring agent: Vector on every client node (system job). It ships
-#   - the logs of every container (docker socket; labels: host, nomad job / task / namespace, level) and Tetragon's event log to Loki,
+#   - the logs of every container (docker API through a filtering proxy task; labels: host, nomad job / task / namespace, level) and Tetragon's event log to Loki,
 #   - the metrics of the node (Nomad, Consul, Tetragon, itself) and of every consul service tagged `metrics` that runs on this node to Prometheus
 #     (remote write); vector scrapes, Prometheus only stores,
 #   - on the node of the monitoring server only: what happens in the cluster (Nomad nodes joining / leaving / draining, allocations and their restarts,
@@ -18,6 +18,9 @@ variable "domain" {
 variable "tls_resolver" {
   type    = string
   default = ""
+}
+variable "docker_proxy_image" {
+  type = string
 }
 variable "templates_dir" {
   type = string
@@ -100,9 +103,46 @@ job "monitoring-agent" {
       }
     }
 
+    # The only task that sees the docker socket. A read-only mount does not make the socket read-only (the API behind it can start privileged containers = root on
+    # the node), so this proxy answers GET requests for the container list, inspect, logs and events and refuses everything else (403). Listens on the loopback
+    # of the group network (default of the image), i.e. only vector can reach it. Not filterable: `inspect` shows the environment of every container.
+    task "docker-proxy" {
+      driver = "docker"
+      # the socket is root:docker 0660: root (owner) without any capability can use it
+      user = "0"
+
+      lifecycle {
+        hook    = "prestart"
+        sidecar = true
+      }
+
+      volume_mount {
+        volume      = "docker-sock"
+        destination = "/var/run/docker.sock"
+        read_only   = true
+      }
+
+      env {
+        SP_ALLOW_GET = "/(v1\\.[0-9]+/)?(_ping|version|events|containers/json|containers/[a-zA-Z0-9]+/(json|logs))"
+        SP_LISTENIP  = "127.0.0.1"
+      }
+
+      config {
+        image           = var.docker_proxy_image
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+      }
+
+      resources {
+        cpu    = 50
+        memory = 32
+      }
+    }
+
     task "vector" {
       driver = "docker"
-      # root inside the container (the docker socket, tetragon's root-only log directory), but without capabilities and with a read-only root filesystem
+      # root inside the container (tetragon's root-only log directory, /var/log), but without capabilities and with a read-only root filesystem.
+      # No docker socket: the logs come through the proxy task (below)
       user = "0"
 
       # templates that read the consul catalog (services) log in to consul with the task's workload identity (policy-nomad-tasks: read the catalog)
@@ -127,11 +167,6 @@ job "monitoring-agent" {
       volume_mount {
         volume      = "vector"
         destination = "/var/lib/vector"
-      }
-      volume_mount {
-        volume      = "docker-sock"
-        destination = "/var/run/docker.sock"
-        read_only   = true
       }
       # the system logs of the node (/var/log, read only): nomad, consul, docker, sshd, the kernel; root without capabilities cannot read files of other owners (mode 0640)
       volume_mount {

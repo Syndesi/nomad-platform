@@ -92,6 +92,15 @@ http:
       rule: Host(`status.{{ $zone }}`)
       tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
 {{- end }}
+    # the cluster's own internal apps (cluster_internal_apps): <name>.{{ $zone }}, the same construction as grafana above
+{{- range $app := env "TPL_INTERNAL_APPS" | parseJSON }}
+    app-{{ $app.name }}:
+      entryPoints: [vpn]
+      middlewares: [admin-net, admin-headers]
+      service: app-{{ $app.name }}
+      rule: Host(`{{ $app.name }}.{{ $zone }}`)
+      tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
+{{- end }}
     traefik:
       entryPoints: [vpn]
       middlewares: [admin-net, admin-headers]
@@ -193,6 +202,13 @@ http:
         passHostHeader: true
         servers:
           - url: http://{{ env "TPL_GATUS_ADDR" }}
+{{- end }}
+{{- range $app := env "TPL_INTERNAL_APPS" | parseJSON }}
+    app-{{ $app.name }}:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://{{ $app.addr }}
 {{- end }}
 # The VPN's way in: tcp/443 with the SNI {{ env "TPL_VPN_HOST" }} goes to wstunnel in this namespace, TLS passed through (wstunnel terminates it and asks
 # for the client certificate). Defined here and not by tags: whoever submits a job writes tags.

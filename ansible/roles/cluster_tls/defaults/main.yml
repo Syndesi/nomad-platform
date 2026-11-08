@@ -30,10 +30,11 @@ cluster_tls_node_sans: "{{ (cluster_tls_node_dns_sans | map('regex_replace', '^'
 cluster_tls_ingress: "{{ cluster_acme_ca == 'internal' and inventory_hostname in groups['cluster_ingress'] | default([]) }}"
 cluster_tls_authelia: "{{ inventory_hostname in cluster_authelia_hosts and inventory_hostname in groups['cluster_clients'] | default([]) }}"
 # traefik calls authelia at https://<cluster address>:9091
-cluster_tls_authelia_sans: "DNS:{{ cluster_node_fqdn }},DNS:authelia.service.consul,IP:127.0.0.1,IP:{{ cluster_ip }}"
+cluster_tls_authelia_sans: "DNS:{{ cluster_node_fqdn }},DNS:authelia.service.consul,DNS:auth.{{ cluster_domain }},IP:127.0.0.1,IP:{{ cluster_ip }}"
 # the second authelia (same node, same names plus its own service name) and the VPN: wstunnel's server certificate, and the wildcard of the internal zone
 # (ingress nodes only; traefik serves it on the entry point "vpn")
-cluster_tls_authelia_internal_sans: "DNS:{{ cluster_node_fqdn }},DNS:authelia-internal.service.consul,IP:127.0.0.1,IP:{{ cluster_ip }}"
+# + auth.<zone>: the apps that log in with it (OpenID Connect, docs/reference.md) call it by that name through their mesh sidecar and verify the certificate
+cluster_tls_authelia_internal_sans: "DNS:{{ cluster_node_fqdn }},DNS:authelia-internal.service.consul,DNS:auth.{{ cluster_internal_zone }},IP:127.0.0.1,IP:{{ cluster_ip }}"
 cluster_tls_vpn: "{{ inventory_hostname in groups['cluster_ingress'] | default([]) }}"
 cluster_tls_vpn_sans: "DNS:{{ cluster_vpn_host }}"
 cluster_tls_internal_sans: "DNS:*.{{ cluster_internal_zone }},DNS:{{ cluster_internal_zone }}"

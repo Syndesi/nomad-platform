@@ -43,6 +43,8 @@ out = {
     "cluster_monitoring_grafana_admin_password": rnd(24),
     "cluster_monitoring_oidc_client_secret": oidc,
     "cluster_monitoring_oidc_client_secret_hash": pbkdf2(oidc),
+    "cluster_authelia_oidc_hmac_secret": secrets.token_hex(32),
+    "cluster_authelia_oidc_jwks_key": subprocess.run(["openssl", "genrsa", "4096"], capture_output=True, check=True, text=True).stdout,
     "cluster_authelia_internal_oidc_hmac_secret": secrets.token_hex(32),
     "cluster_authelia_internal_oidc_jwks_key": subprocess.run(["openssl", "genrsa", "4096"], capture_output=True, check=True, text=True).stdout,
     "cluster_monitoring_ntfy_admin_password": ntfy_admin,
