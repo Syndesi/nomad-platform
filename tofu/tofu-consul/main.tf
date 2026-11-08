@@ -61,7 +61,7 @@ resource "consul_acl_token" "service" {
     # What the controller works with (tofu, backup, restore) once the bootstrap token (`initial_management`) is handed over and deleted
     # (role consul, tasks handover). Same power; the difference is that its secret is in no config file of any node.
     ops = "global-management"
-    dns         = "dns"
+    dns = "dns"
   }
   description = "${each.key} (managed by opentofu)"
   policies    = [each.value]
@@ -75,6 +75,29 @@ data "consul_acl_token_secret_id" "agent" {
 
 data "consul_acl_token_secret_id" "service" {
   for_each    = consul_acl_token.service
+  accessor_id = each.value.id
+}
+
+# ---- projects (docs/projects.md): a consul token for those that ask for one (consul_rules = the policy, HCL) -----------
+locals {
+  consul_projects = { for k, v in var.projects : k => v if trimspace(v.consul_rules) != "" }
+}
+
+resource "consul_acl_policy" "project" {
+  for_each    = local.consul_projects
+  name        = "project-${each.key}"
+  description = "project ${each.key} (managed by opentofu)"
+  rules       = each.value.consul_rules
+}
+
+resource "consul_acl_token" "project" {
+  for_each    = local.consul_projects
+  description = "project ${each.key} (managed by opentofu)"
+  policies    = [consul_acl_policy.project[each.key].name]
+}
+
+data "consul_acl_token_secret_id" "project" {
+  for_each    = consul_acl_token.project
   accessor_id = each.value.id
 }
 

@@ -1,5 +1,9 @@
 {{- /* where consul and nomad answer: the node's cluster address (traefik has its own network namespace) */ -}}
 {{- $host := env "NOMAD_HOST_IP_https" }}
+# no calls home: no check for new versions, no anonymous usage statistics
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
 log:
   level: INFO
   noColor: true

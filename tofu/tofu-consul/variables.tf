@@ -31,3 +31,11 @@ variable "stepca_enabled" {
   type        = bool
   default     = false
 }
+
+variable "projects" {
+  description = "Projects (docs/projects.md): only those with consul_rules get a consul policy and token"
+  type = map(object({
+    consul_rules = optional(string, "")
+  }))
+  default = {}
+}

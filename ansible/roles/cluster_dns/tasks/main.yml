@@ -12,10 +12,17 @@
     state: directory
     mode: "0755"
 
-- name: Docker daemon dns
+# live-restore: the containers keep running while dockerd is stopped or restarted (a security update of docker by unattended-upgrades / apk upgrade,
+# a change of this file), nomad's docker driver finds them again. Not for a major version change of docker, and not with swarm (not used here).
+# No daemon-wide `init: true`: it puts tini in front of every container, and images that bring their own init (s6-overlay: every linuxserver.io image, the
+# wireguard sidecar of traefik) refuse to start when they are not pid 1. A job that wants one sets `init = true` in its docker config.
+# default-cgroupns-mode: every container has its own cgroup namespace (the default on cgroup v2,
+# set so that a cgroup v1 node does the same). userland-proxy: published ports are plain iptables rules, no docker-proxy process per port.
+# default-ulimits: see cluster_docker_nofile.
+- name: Docker daemon config (dns, logs, live-restore)
   ansible.builtin.copy:
     dest: /etc/docker/daemon.json
-    content: "{{ ({'dns': [cluster_dns_docker_bridge_ip], 'log-driver': 'json-file', 'log-opts': {'max-size': cluster_docker_log_max_size, 'max-file': cluster_docker_log_max_files | string}, 'no-new-privileges': true} | combine(cluster_docker_daemon_extra, recursive=True)) | to_nice_json }}\n"
+    content: "{{ ({'dns': [cluster_dns_docker_bridge_ip], 'log-driver': 'json-file', 'log-opts': {'max-size': cluster_docker_log_max_size, 'max-file': cluster_docker_log_max_files | string}, 'no-new-privileges': true, 'live-restore': true, 'default-cgroupns-mode': 'private', 'userland-proxy': false, 'default-ulimits': {'nofile': {'Name': 'nofile', 'Hard': cluster_docker_nofile | int, 'Soft': cluster_docker_nofile | int}}} | combine(cluster_docker_daemon_extra, recursive=True)) | to_nice_json }}\n"
     owner: root
     group: root
     mode: "0644"

@@ -4,11 +4,30 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- **Projects** (`cluster_projects`, `docs/projects.md`): scoped access for CI and third party apps. Each project gets a Nomad namespace, a policy limited to it
+  and a token (tofu-nomad, output `project_tokens`), optionally a Consul token (`consul_rules`, tofu-consul), and a VPN device. The global tokens are unchanged.
+  New: `task projects`, `task project:vpn|token|export|rotate|revoke`, `scripts/project.sh`. `project:export` writes a tar, age encrypted to a recipient
+  (or `--plain` base64 for a CI secret store) with the tokens, the VPN files and `connect.sh` / `disconnect.sh`.
+- **`nomad-api.<zone>` and `consul-api.<zone>`** on the VPN entry point: the same backends as `nomad.` / `consul.`, token only (no second factor), for every
+  VPN device (`api-net`; the ops names accept people's half only, `admin-net`; people's half `.2` - `.127`, projects' `.128` and up, `cluster_vpn_project_first`). authelia-internal rules
+  can now have `networks`. `task vpn:client` makes devices in the people's half (`.2` - `.127`, was `.2` - `.254`: existing devices keep their addresses).
+- **Traefik is not root again** (`cluster_traefik_uid` 65532; it was 0 since the namespace change): the namespace did not get the host's
+  `ip_unprivileged_port_start`, so the task `vpn` sets it (80) in the shared namespace, and the host-wide setting of older versions is removed
+  (`/etc/sysctl.d/90-cluster-ingress.conf`; the value stays until a reboot). The data volume and the ingress key change owner with the next deploy.
+- **No calls home:** Nomad and Consul `disable_update_check` + `disable_anonymous_signature`, Traefik `checkNewVersion: false` / `sendAnonymousUsage: false`.
+- **Docker `live-restore`** in `/etc/docker/daemon.json`: a Docker update no longer restarts the containers (limits in `docs/reference.md`).
+- **Docker settings:** `default-cgroupns-mode: private`, `userland-proxy: false`, `default-ulimits` nofile 1048576 (`cluster_docker_nofile`). Nomad's
+  `allow_caps` is set on every client now (before: only where extra capabilities were configured) and lacks `mknod`, `audit_write` and `setfcap`; privileged mode and
+  `pid_mode = "host"` stay refused, runtimes are not restricted (nvidia works).
+- Tools image: `util-linux-misc` (`column`), used by `task projects` and `task vpn:list`.
+- `scripts/vpn.sh client` also writes `connect.sh` / `disconnect.sh` (VPN up and down without installing: wstunnel + wireguard + /etc/hosts, for CI runners).
+- Docs: `task tokens` lists accessor ids (the reference said it printed the tokens).
+
 - **Internal services behind a VPN** (zone `<cluster_name>.internal`, `cluster_internal_zone`): `auth.`, `nomad.`, `consul.`, `traefik.` are no longer on the
   public `websecure` entry point (their routers moved to Traefik's file provider on a new entry point `vpn`, bound to the WireGuard address inside the
   allocation; `websecure.asDefault: true`). New in Traefik's allocation: a WireGuard server (`wg1`, MTU 1280, preshared key per peer, nft guard: only
   tcp/443 and 53 reach it), wstunnel (disguise over tcp/443, TCP router with TLS passthrough, mTLS, `--restrict-to 127.0.0.1:51820`) and a dnsmasq for
-  the zone. Traefik always runs in its own namespace now (`cni/egress`, root, `ip_forward=0`). New: `task vpn:init|client|revoke|list`,
+  the zone. Traefik always runs in its own namespace now (`cni/egress`, `ip_forward=0`; not root, see below). New: `task vpn:init|client|revoke|list`,
   `scripts/vpn.sh`, `cluster_vpn_*`; client files (wg-quick, systemd and NetworkManager variants) in `secrets/vpn/<device>/`. `task proxy:*`
   goes through the VPN. `cluster_wireguard_image`, `cluster_wstunnel_image`, `cluster_dnsmasq_image` are pinned by version tag.
 - **Second Authelia (`authelia-internal`)**, job `authelia` run twice (`cluster_jobs_authelia_instances`): own cookie domain, secrets

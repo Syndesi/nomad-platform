@@ -79,3 +79,13 @@ variable "stepca_items" {
   sensitive   = true
   default     = {}
 }
+
+variable "projects" {
+  description = "Projects (docs/projects.md): name => namespace, host volumes the project may mount, capabilities on top of the default set. Each gets a namespace, a policy limited to it and a token."
+  type = map(object({
+    namespace          = optional(string)
+    host_volumes       = optional(list(string), [])
+    extra_capabilities = optional(list(string), [])
+  }))
+  default = {}
+}

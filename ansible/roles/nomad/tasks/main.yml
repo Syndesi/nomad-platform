@@ -62,19 +62,12 @@
     mode: "0700"
   when: nomad_stepca_enabled | bool
 
-# a traefik that is not root binds 80 / 443 without a capability when the kernel allows unprivileged binds from port 80 on (host network;
-# harmless on a node of this cluster: every host service that listens runs as root or as an account of the platform)
-- name: Unprivileged processes may bind ports from 80 (traefik's non-root user)
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_unprivileged_port_start
-    value: "80"
-    sysctl_file: /etc/sysctl.d/90-cluster-ingress.conf
-    sysctl_set: true
-    reload: false
-    state: present
-  when:
-    - inventory_hostname in groups['cluster_ingress'] | default([])
-    - cluster_traefik_uid | int != 0
+# Older versions let every process of the ingress node bind ports from 80 (traefik ran in the host network). It runs in its own namespace now, which gets
+# the setting from the job (task vpn), so the host is back to the default: the file goes (a node that has it keeps the value until its next reboot).
+- name: The host does not allow unprivileged binds from port 80 any more
+  ansible.builtin.file:
+    path: /etc/sysctl.d/90-cluster-ingress.conf
+    state: absent
 
 # Authelia's state: a folder each for the two instances (only the user authelia runs as, cluster_authelia_uid), before the agent that offers
 # them as volumes

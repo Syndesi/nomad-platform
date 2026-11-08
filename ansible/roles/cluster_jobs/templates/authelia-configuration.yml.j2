@@ -62,6 +62,12 @@ access_control:
         - {{ d | to_json }}
 {% endfor %}
       policy: {{ rule.policy | to_json }}
+{% if rule.networks | default([]) %}
+      networks:
+{% for n in rule.networks %}
+        - {{ n | to_json }}
+{% endfor %}
+{% endif %}
 {% if rule.subject | default([]) %}
       subject:
 {% for s in rule.subject %}

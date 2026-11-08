@@ -154,8 +154,8 @@ EOT
       }
 
       config {
-        image   = var.image
-        ports   = ["http"]
+        image = var.image
+        ports = ["http"]
         # the rendered files are in the task's secrets directory (/secrets), which nomad hands to the task user; a subdirectory would be root's
         args = ["--config", "/secrets/configuration.yml"]
         # nothing but its own files: no capability (port 9091 needs none), a read-only root filesystem (config, database and certificate

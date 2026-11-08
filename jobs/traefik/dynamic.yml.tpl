@@ -43,27 +43,43 @@ http:
     # policy (nodes and jobs) added, so the web ui can look without a nomad login.
     nomad:
       entryPoints: [vpn]
-      middlewares: [admin-headers]
+      middlewares: [admin-net, admin-headers]
       service: nomad
       rule: Host(`nomad.{{ $zone }}`) && HeaderRegexp(`X-Nomad-Token`, `.+`)
       priority: 200
       tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
     nomad-ui:
       entryPoints: [vpn]
-      middlewares: [admin-headers, nomad-ui-token]
+      middlewares: [admin-net, admin-headers, nomad-ui-token]
       service: nomad
       rule: Host(`nomad.{{ $zone }}`)
       priority: 100
       tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
     consul:
       entryPoints: [vpn]
-      middlewares: [admin-headers]
+      middlewares: [admin-net, admin-headers]
       service: consul
       rule: Host(`consul.{{ $zone }}`)
       tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
+    # The APIs for the command line and for projects (CI, third party apps; docs/projects.md): the same backends, reached from every VPN device (people's
+    # and projects' half) with an ACL token and nothing else: authelia-internal lets these two names through without a second factor for the VPN
+    # (authelia_internal_access_rules), the ipAllowList is the second lock. No ui token is added here: a request without a token gets nothing.
+    # The TLS option is the default one (TLS 1.3, any key exchange): the clients are curl / go / python on a runner, not browsers.
+    nomad-api:
+      entryPoints: [vpn]
+      middlewares: [api-net, admin-headers]
+      service: nomad
+      rule: Host(`nomad-api.{{ $zone }}`)
+      tls: { options: default{{ with $stepca }}, certResolver: stepca{{ end }} }
+    consul-api:
+      entryPoints: [vpn]
+      middlewares: [api-net, admin-headers]
+      service: consul
+      rule: Host(`consul-api.{{ $zone }}`)
+      tls: { options: default{{ with $stepca }}, certResolver: stepca{{ end }} }
     traefik:
       entryPoints: [vpn]
-      middlewares: [admin-headers]
+      middlewares: [admin-net, admin-headers]
       service: api@internal
       rule: Host(`traefik.{{ $zone }}`)
       tls: { options: pq-only{{ with $stepca }}, certResolver: stepca{{ end }} }
@@ -111,6 +127,14 @@ http:
         contentTypeNosniff: true
         frameDeny: true
         referrerPolicy: no-referrer
+    # the two halves of the VPN addresses (cluster_vpn_admin_net / cluster_vpn_project_net): people's devices and projects' devices. The source address is the
+    # device's own (the namespace redirects the port, it does not rewrite the source).
+    admin-net:
+      ipAllowList:
+        sourceRange: ["{{ env "TPL_VPN_ADMIN_NET" }}"]
+    api-net:
+      ipAllowList:
+        sourceRange: ["{{ env "TPL_VPN_ADMIN_NET" }}", "{{ env "TPL_VPN_PROJECT_NET" }}"]
     nomad-ui-token:
       headers:
         customRequestHeaders:

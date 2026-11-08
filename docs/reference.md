@@ -37,7 +37,8 @@ the cluster address only, registered as the Consul service `traefik-metrics`.
 Nomad and Consul deny everything by default and have no anonymous access. The Nomad web ui behind traefik is the one exception, only
 for people who passed Authelia: a request without a Nomad token gets traefik's fallback token (policy `ui`: list and read jobs, read
 nodes), a request with its own `X-Nomad-Token` is passed on unchanged. The Consul ui needs a Consul token. For the cli there is a local
-proxy that logs in through Authelia (`task proxy:up|login|status|env|down`). `task tokens` prints the management tokens.
+proxy that logs in through Authelia (`task proxy:up|login|status|env|down`). `task tokens` lists the ACL tokens that tofu minted (accessor ids; the secrets
+stay in the encrypted states). CI and third party apps get **project** tokens, limited to a namespace, and a project VPN device: `docs/projects.md`.
 
 Consul's bootstrap token (`cluster_consul_management_token` in the sops secrets, `acl.tokens.initial_management`) exists only while a cluster is
 built. The same deploy lets tofu-consul mint the **ops token** (policy `global-management`, `service_tokens.ops` in the encrypted state), writes the
@@ -126,7 +127,8 @@ device --wg--> 10.99.n.1: tcp/443 (redirected to the vpn entry point) and udp+tc
 * **WireGuard is the gate** (key + preshared key per device); wstunnel is only the disguise over tcp/443 (`--restrict-to 127.0.0.1:51820`, client
   certificate required, CN = device name). The UDP port is not published. `ip_forward=0` in the namespace and an nft table drop everything but 443
   and 53 on `wg1`: no route into the cluster network, consul, nomad, step-ca, sshd or the metrics port. Traefik always runs in its own namespace
-  (`cni/egress`; `cluster_traefik_uid` is root there).
+  (`cni/egress`). Traefik is **not root** (`cluster_traefik_uid`, 65532): the sidecar `vpn` sets `net.ipv4.ip_unprivileged_port_start=80` in the shared namespace, the
+  host's value does not reach it.
 * The inner TLS is `pq-only` (TLS 1.3, X25519MLKEM768): a client without it (OpenSSL < 3.5, old browsers) cannot open the internal names. The outer layers
   are not post-quantum (WireGuard has a preshared key as a hedge).
 * **Devices:** `task vpn:init` (once: server key), `task vpn:client -- <device>` (key pair, preshared key, address, client certificate; files in
@@ -135,6 +137,8 @@ device --wg--> 10.99.n.1: tcp/443 (redirected to the vpn entry point) and udp+tc
   The client certificate lives `cluster_vpn_client_valid_days` (365); run `task vpn:client -- <device>` again before it expires (the wireguard
   keys stay); `task smoke` and `task proxy:status` warn `cluster_vpn_client_warn_days` before. No `DNS=` in the client config: only the zone goes
   through the VPN (systemd-resolved), several clusters can be connected at once (distinct subnets, interfaces, zones, local ports).
+* **Two halves of the address space:** `.2` - `.127` are people's devices (`task vpn:client`: the ops UIs behind authelia-internal), `.128` and up are
+  project devices (`task project:vpn`: only `nomad-api.<zone>` and `consul-api.<zone>`, ACL token instead of a second factor). `docs/projects.md`.
 * **Command line tools:** `task proxy:up|login` now goes through the VPN (`PROXY_UPSTREAM` defaults to `10.99.n.1:443`); the VPN must be up.
 * Break glass is SSH (public, key only), e.g. `scripts/tunnel.sh` to the node's 127.0.0.1 ports with a token.
 * Accepted: `vpn.<cluster_domain>` is visible as SNI on 443 and the gate is reachable from the internet (mTLS); the client's public IP is lost behind
@@ -170,6 +174,27 @@ Nomad and Consul agent certificates **never** come from step-ca (an expired one 
   `cluster_host_volumes: [{name, path, read_only}]` in `host_vars` and use `volume` + `volume_mount`. A read-only mount of the docker
   socket still allows the whole docker API.
 * `cluster_docker_daemon_extra` is merged into `/etc/docker/daemon.json` (e.g. the `nvidia` runtime).
+* **Daemon settings of the platform** (`/etc/docker/daemon.json`; `cluster_docker_daemon_extra` wins): `no-new-privileges`, `default-cgroupns-mode: private`, `userland-proxy: false` (published ports are iptables rules; no `docker-proxy` per port), `default-ulimits`
+  `nofile` = `cluster_docker_nofile` (1048576: databases, dev setups; a task can set its own), the `dns` of the restricted resolver and rotated `json-file` logs. **Not `init: true`**: with a daemon-wide init, images that bring their own (s6-overlay, i.e. every linuxserver.io image and the
+  wireguard sidecar of Traefik) exit at once ("can only run as pid 1"), and a job cannot opt out; a job that wants tini sets `init = true` in its docker config.
+* **What confines a container:** the default seccomp profile on both OS families, AppArmor (`docker-default`) additionally on Ubuntu (Alpine's kernel has no AppArmor
+  or SELinux), `no-new-privileges`, a private cgroup namespace on cgroup v2. Nothing here switches them off; a job can (`security_opt`), see `docs/projects.md`.
+* **Nomad's docker plugin:** `allow_caps` is always set (`nomad_docker_default_caps` + `nomad_docker_extra_caps`): it limits what `cap_add` may name, not the capabilities
+  Docker gives every container. Privileged mode is off (nomad's default), `pid_mode = "host"` is refused with it, runtimes are not restricted (the `nvidia` runtime of
+  `cluster_docker_daemon_extra` works as soon as a job asks for it).
+* **`live-restore` is on:** the containers keep running while dockerd is stopped or restarted, so a security update of Docker (unattended-upgrades on Ubuntu,
+  the `apk upgrade` cron job on Alpine) or a change of `daemon.json` does not restart the jobs. Nomad's docker driver finds the containers again; the node
+  may report the driver as unhealthy for a few seconds. Limits: it does not carry across a major version of Docker (the daemon then has to stop the
+  containers), a daemon that stays down for long leaves the containers without log collection (the pipe breaks; docker's log driver, not the container, suffers),
+  and it cannot be combined with Swarm (not used here). Switch it off with `cluster_docker_daemon_extra: {live-restore: false}`.
+
+## No calls home
+
+Nomad and Consul run with `disable_update_check` (no check for new versions and security bulletins) and `disable_anonymous_signature`; Traefik with
+`checkNewVersion: false` and `sendAnonymousUsage: false`. None of them has a telemetry sink configured: Nomad exposes its metrics for pulling
+(`/v1/metrics?format=prometheus`, behind the ACL; `nomad_publish_workload_metrics` for the workload ones), Consul has no `telemetry` block, and Traefik's
+Prometheus entry point is for the cluster only (`cluster_traefik_metrics`). Authelia and step-ca do not send anything either. What is left outbound
+is the packages (the update timers), the image pulls, and ACME with a public CA.
 * Logs: the agents keep seven days, one file per day (`cluster_log_retention_days`). Container logs are rotated by size, docker cannot do days:
   seven files of 50 MB per container (`cluster_docker_log_max_files`, `cluster_docker_log_max_size`). Metrics are not handled.
 * `no-new-privileges` is set as the daemon default; a job opts out with `security_opt = ["no-new-privileges=false"]`.

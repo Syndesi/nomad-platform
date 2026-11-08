@@ -4,6 +4,9 @@ node_id = "{{ consul_node_id }}"
 datacenter = "{{ cluster_datacenter }}"
 data_dir = "{{ consul_data_dir }}"
 log_level = "INFO"
+# no calls home: no check for new versions / security bulletins (and so no anonymous signature for it)
+disable_update_check = true
+disable_anonymous_signature = true
 
 bind_addr = "{{ consul_ip }}"
 advertise_addr = "{{ consul_ip }}"

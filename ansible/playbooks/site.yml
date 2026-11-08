@@ -233,7 +233,8 @@
         gather_subset: [min, network]
 
     # the nodes join the servers by their cluster address; `task node -- <host>` limits the play to one node
-    - name: Facts of the servers outside this run
+    # the strategy of this play is linear (the default; nothing here sets `free`), which is what run_once relies on
+    - name: Facts of the servers outside this run  # noqa: run-once[task]
       ansible.builtin.setup:
         gather_subset: [min, network]
       delegate_to: "{{ item }}"
@@ -399,6 +400,7 @@
           datacenter: "{{ cluster_datacenter }}"
           nodes: "{{ (groups['cluster_servers'] + groups['cluster_clients']) | unique }}"
           stepca_enabled: "{{ cluster_stepca_enabled | bool }}"
+          projects: "{{ cluster_projects }}"
 
 # The agent tokens exist now: servers write them into their config (a restart only if it changed),
 # clients join with theirs.

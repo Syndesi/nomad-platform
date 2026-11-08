@@ -157,6 +157,8 @@ cluster_docker_daemon_extra: {}
 # The nodes pull it through docker when it is first used.
 cluster_sqlite_image: keinos/sqlite3:3.54.1
 # Container logs (docker json-file): docker rotates by size only, not by day. Per container: max-file files of max-size.
+# open files per container (nofile, soft and hard): high on purpose, for databases and dev setups. A job can still set its own (task config `ulimit`).
+cluster_docker_nofile: 1048576
 cluster_docker_log_max_size: 50m
 cluster_docker_log_max_files: 7
 # The platform also sets `no-new-privileges` for all containers (daemon default): setuid binaries inside a container do not gain
@@ -223,14 +225,15 @@ cluster_consul_task_kv_prefixes: []
 
 # --- traefik: own network namespace, the VPN, the optional uplink tunnel ---------------------------------
 # Traefik always runs in its own network namespace (network "cni/egress"), because the VPN of the internal services terminates in it (see the
-# vpn section below). It is root there with only net_bind_service: the sysctl ip_unprivileged_port_start is not ours to set in that namespace.
+# vpn section below). It does not run as root: the sidecar `vpn` sets net.ipv4.ip_unprivileged_port_start=80 in that namespace (the host's value does not
+# reach it), so cluster_traefik_uid binds 80 / 443 without being root; the capability NET_BIND_SERVICE is still the only one it has.
 # cluster_traefik_wireguard (optional, independent of the VPN): traefik is also a wireguard CLIENT of an uplink (a router in a homelab:
 # 80 / 443 arrive through it), a second prestart sidecar in the same allocation. Needs:
 #   cluster_wireguard_image  a wireguard image whose entrypoint brings up /config/wg_confs/*.conf (the linuxserver one; also used for the VPN server)
 #   `task wireguard:conf -- <wg0.conf>`  stores the wg-quick config sops-encrypted (inventory/group_vars/all/wireguard.sops.yml)
 cluster_traefik_wireguard: false
-# The user id traefik runs as in its container. Root: see above.
-cluster_traefik_uid: 0
+# The user id traefik runs as in its container (0 = root, the image's own: not needed any more, also not with cluster_traefik_wireguard: its tunnel is a sidecar).
+cluster_traefik_uid: 65532
 cluster_wireguard_image: linuxserver/wireguard:1.0.20260223
 # traefik's prometheus metrics: own entry point and port, consul service "traefik-metrics", for the cluster only (the firewall limits it
 # to cluster_subnets), not routed by traefik. A scraper job finds them through consul.
@@ -265,6 +268,12 @@ cluster_dnsmasq_image: dockurr/dnsmasq:2.93
 # lifetime of the client certificates for the wstunnel mTLS gate (revocation = remove the wireguard peer, `task vpn:revoke`)
 cluster_vpn_client_valid_days: 365
 cluster_vpn_client_warn_days: 30
+# The address space of the VPN is split in two halves (the subnet is a /24): devices of people (`task vpn:client`, .2 - .127) and devices of
+# projects (`task project:vpn`, from cluster_vpn_project_first). The half is the scope: everyone reaches nomad-api. and consul-api.<zone> with an ACL token only
+# (no second factor, see docs/projects.md), only people reach the ops UIs behind authelia-internal (traefik ipAllowList as well as authelia).
+cluster_vpn_project_first: 128
+cluster_vpn_admin_net: "{{ cluster_vpn_subnet.split('/')[0].split('.')[:3] | join('.') }}.0/25"
+cluster_vpn_project_net: "{{ cluster_vpn_subnet.split('/')[0].split('.')[:3] | join('.') }}.128/25"
 
 # the second Authelia (authelia-internal): cookie domain cluster_internal_zone, its own secrets, database and TOTP seeds. Same users and password hashes.
 cluster_authelia_internal_port: 9092
@@ -276,10 +285,16 @@ cluster_internal_tls_dir: /etc/cluster/tls-internal # traefik's certificate for 
 # (authelia_internal_extra_rules in the cluster repo: [{domain, policy, subject}], same format as authelia_access_rules; first match wins).
 authelia_internal_extra_rules: []
 authelia_internal_access_rules: >-
-  {{ [{'domain': 'nomad.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
+  {{ [{'domain': ['nomad-api.' ~ cluster_internal_zone, 'consul-api.' ~ cluster_internal_zone], 'policy': 'bypass', 'networks': [cluster_vpn_admin_net, cluster_vpn_project_net]},
+      {'domain': 'nomad.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
       {'domain': 'consul.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']},
       {'domain': 'traefik.' ~ cluster_internal_zone, 'policy': 'two_factor', 'subject': ['group:admin']}]
      + authelia_internal_extra_rules }}
+
+# ---- projects: scoped access for CI and third party apps (docs/projects.md) --------------------------------------------------
+# name -> {namespace, host_volumes, extra_capabilities, consul_rules}; all optional. Each project gets a Nomad namespace, a policy limited to it and a token
+# (tofu-nomad), optionally a Consul policy + token (tofu-consul, only with consul_rules). Devices: `task project:vpn`, hand-over: `task project:export`.
+cluster_projects: {}
 
 # ---- step-ca: the always-online intermediate CA (job step-ca), reached only through the Consul service mesh ----
 cluster_stepca_enabled: true

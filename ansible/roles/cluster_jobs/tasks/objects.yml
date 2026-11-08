@@ -17,6 +17,7 @@
       nomad_token: "{{ cluster_nomad_ops_token }}"
       datacenter: "{{ cluster_datacenter }}"
       task_kv_prefixes: "{{ cluster_consul_task_kv_prefixes }}"
+      projects: "{{ cluster_projects }}"
       traefik_consul_token: "{{ cluster_consul_out.service_tokens.traefik }}"
       authelia_configuration: "{{ lookup('ansible.builtin.template', 'authelia-configuration.yml.j2', template_vars={'authelia_inst': cluster_jobs_authelia_instances[0]}) }}"
       authelia_users: "{{ lookup('ansible.builtin.template', 'authelia-users.yml.j2') }}"

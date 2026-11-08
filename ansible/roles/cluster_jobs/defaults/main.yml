@@ -64,6 +64,8 @@ cluster_jobs_list:
       vpn_wstunnel_port: "{{ cluster_vpn_wstunnel_port }}"
       vpn_entrypoint_port: "{{ cluster_vpn_entrypoint_port }}"
       vpn_wstunnel_user: "{{ cluster_vpn_uid | string }}"
+      vpn_admin_net: "{{ cluster_vpn_admin_net }}"
+      vpn_project_net: "{{ cluster_vpn_project_net }}"
       wstunnel_image: "{{ cluster_wstunnel_image }}"
       dnsmasq_image: "{{ cluster_dnsmasq_image }}"
       stepca_acme_url: "{{ cluster_stepca_acme_url if cluster_stepca_enabled | bool else '' }}"

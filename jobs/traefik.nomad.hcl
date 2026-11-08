@@ -16,7 +16,7 @@
 variable "user" {
   type        = string
   default     = ""
-  description = "user (id) of the traefik container; empty = the image's (root). Set by the deploy (cluster_traefik_uid)"
+  description = "user (id) of the traefik container; empty = the image's (root). Set by the deploy (cluster_traefik_uid, default 65532)"
 }
 
 variable "datacenter" {
@@ -86,6 +86,14 @@ variable "vpn_entrypoint_port" {
 variable "vpn_wstunnel_user" {
   type    = string
   default = "65532"
+}
+variable "vpn_admin_net" {
+  type        = string
+  description = "CIDR of the VPN addresses of people's devices: the only sources of the ops UIs (nomad., consul., traefik.<zone>)"
+}
+variable "vpn_project_net" {
+  type        = string
+  description = "CIDR of the VPN addresses of project devices: the only sources of nomad-api. and consul-api.<zone> (token only, no second factor)"
 }
 variable "wstunnel_image" {
   type = string
@@ -394,6 +402,9 @@ EOT
         sysctl = {
           "net.ipv4.conf.all.src_valid_mark" = "1"
           "net.ipv4.ip_forward"              = "0"
+          # the namespace is shared by every task of the allocation: traefik, which is not root, binds 80 / 443 because of this (the value of the host
+          # does not reach the namespace; docker's own default for it is 0, set here so that nothing depends on the docker version)
+          "net.ipv4.ip_unprivileged_port_start" = "80"
         }
         volumes = ["secrets/wg:/config/wg_confs", "local/vpn.nft:/vpn.nft:ro"]
       }
@@ -606,8 +617,8 @@ EOT
         destination = "secrets/traefik.yml"
         perms       = "0600"
         # nomad writes templates as root: the task user has to own what it reads (0600)
-        uid         = var.user == "" ? 0 : parseint(var.user, 10)
-        gid         = var.user == "" ? 0 : parseint(var.user, 10)
+        uid = var.user == "" ? 0 : parseint(var.user, 10)
+        gid = var.user == "" ? 0 : parseint(var.user, 10)
       }
 
       # authelia, nomad / consul / dashboard behind the authelia forward-auth (the middleware is defined here), TLS options,
@@ -617,36 +628,38 @@ EOT
         destination = "secrets/dynamic/cluster.yml"
         perms       = "0600"
         # nomad writes templates as root: the task user has to own what it reads (0600)
-        uid         = var.user == "" ? 0 : parseint(var.user, 10)
-        gid         = var.user == "" ? 0 : parseint(var.user, 10)
+        uid = var.user == "" ? 0 : parseint(var.user, 10)
+        gid = var.user == "" ? 0 : parseint(var.user, 10)
       }
 
       # parameters of the templates above (jobs/traefik/*.tpl), read there with {{ env "..." }}
       env {
-        TPL_DOMAIN        = var.domain
-        TPL_ZONE          = var.internal_zone
-        TPL_VPN_HOST      = var.vpn_host
-        TPL_VPN_PORT      = var.vpn_entrypoint_port
-        TPL_WSTUNNEL_PORT = var.vpn_wstunnel_port
+        TPL_DOMAIN                 = var.domain
+        TPL_ZONE                   = var.internal_zone
+        TPL_VPN_HOST               = var.vpn_host
+        TPL_VPN_PORT               = var.vpn_entrypoint_port
+        TPL_VPN_ADMIN_NET          = var.vpn_admin_net
+        TPL_VPN_PROJECT_NET        = var.vpn_project_net
+        TPL_WSTUNNEL_PORT          = var.vpn_wstunnel_port
         TPL_AUTHELIA_INTERNAL_ADDR = var.authelia_internal_addr
-        TPL_AUTHELIA_ADDR = var.authelia_addr
-        TPL_METRICS_PORT  = var.metrics_port
-        TPL_CONSUL_PORT   = var.consul_port
-        TPL_NOMAD_PORT    = var.nomad_port
-        TPL_TLS_RESOLVER  = var.tls_resolver
-        TPL_STEPCA_ACME_URL = var.stepca_acme_url
-        TPL_STEPCA_HOURS    = var.stepca_cert_hours
+        TPL_AUTHELIA_ADDR          = var.authelia_addr
+        TPL_METRICS_PORT           = var.metrics_port
+        TPL_CONSUL_PORT            = var.consul_port
+        TPL_NOMAD_PORT             = var.nomad_port
+        TPL_TLS_RESOLVER           = var.tls_resolver
+        TPL_STEPCA_ACME_URL        = var.stepca_acme_url
+        TPL_STEPCA_HOURS           = var.stepca_cert_hours
         # lego (traefik's ACME client) trusts the cluster root in addition to the system roots: step-ca's own certificate is signed by it
         LEGO_CA_CERTIFICATES = "/secrets/ca.pem"
-        TPL_ACME_SERVER   = var.acme_server
-        TPL_ACME_EMAIL    = var.acme_email
-        TLS_FINGERPRINT   = var.tls_fingerprint
+        TPL_ACME_SERVER      = var.acme_server
+        TPL_ACME_EMAIL       = var.acme_email
+        TLS_FINGERPRINT      = var.tls_fingerprint
       }
 
       config {
-        image        = var.image
-        args         = ["--configFile=/secrets/traefik.yml"]
-        # the internet edge: no capability but the one for ports 80 / 443 (not even needed as a non-root user, see cluster_traefik_uid),
+        image = var.image
+        args  = ["--configFile=/secrets/traefik.yml"]
+        # the internet edge: not root, no capability but the one for ports 80 / 443 (a sysctl of the task vpn lets a non-root user bind them),
         # a read-only root filesystem (config, data and certificates are mounts)
         cap_drop        = ["ALL"]
         cap_add         = ["NET_BIND_SERVICE"]

@@ -1,0 +1,13 @@
+---
+# Projects: scoped access for CI and third party apps (base/docs/projects.md). Empty = none. Each entry gets
+#   - a Nomad namespace and a Nomad token that reaches that namespace only (tofu-nomad)       -> task project:token / project:export
+#   - optionally a Consul token with the policy in consul_rules (tofu-consul)
+#   - a VPN device in the project half of the address space (task project:vpn -- <name>), the way in for things outside the cluster
+# Tokens do not change by themselves; task project:rotate replaces them. The global deployer token is not touched by any of this.
+cluster_projects: {}
+#  nextcloud:
+#    namespace: nextcloud              # default: the name of the project
+#    host_volumes: [nextcloud-data]    # host volumes its jobs may mount (none by default)
+#    extra_capabilities: []            # on top of: submit-job read-job list-jobs dispatch-job read-logs scale-job alloc-lifecycle (e.g. alloc-exec)
+#    consul_rules: ""                  # a Consul ACL policy (HCL); with it the project also gets a Consul token
+#  outline: {}

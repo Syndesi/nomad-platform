@@ -18,7 +18,7 @@ ARG ALPINE_VERSION
 FROM alpine:${ALPINE_VERSION}
 
 RUN apk add --no-cache ansible-core bash ca-certificates curl incus-client jq openssl py3-cryptography socat \
-    sops age ansible-lint yamllint shellcheck openssh-client wireguard-tools py3-yaml step-cli
+    sops age ansible-lint yamllint shellcheck openssh-client wireguard-tools py3-yaml step-cli util-linux-misc
 COPY --from=tofu /usr/local/bin/tofu /usr/local/bin/tofu
 
 ENV ANSIBLE_COLLECTIONS_PATH=/opt/ansible/collections

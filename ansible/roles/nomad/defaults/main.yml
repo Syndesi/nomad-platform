@@ -6,7 +6,7 @@ nomad_is_server: "{{ inventory_hostname in groups['cluster_servers'] | default([
 nomad_is_client: "{{ inventory_hostname in groups['cluster_clients'] | default([]) }}"
 nomad_ip: "{{ cluster_ip }}"
 nomad_interface: "{{ cluster_interface_effective }}"
-# docker capabilities jobs may add, beyond nomad's defaults: the vpn sidecars of traefik (wireguard, dnsmasq, nftables) need net_admin (ingress nodes only)
+# docker capabilities jobs may add, beyond nomad_docker_default_caps: the vpn sidecars of traefik (wireguard, dnsmasq, nftables) need net_admin (ingress nodes only)
 nomad_docker_extra_caps: "{{ ['net_admin'] if inventory_hostname in groups['cluster_ingress'] | default([]) else [] }}"
 # /v1/metrics answers WITHOUT a token (nomad does not ACL-protect it) and every container reaches the api port. Allocation and node metrics name
 # jobs, tasks and their resource use: off by default, only the agent's own runtime metrics remain. A scraper that needs them: true.
@@ -14,7 +14,10 @@ nomad_publish_workload_metrics: false
 # Task drivers that do not fingerprint on the clients, so no job can use them. Remove a name only if you run jobs with that driver (and
 # then accept that its tasks are outside the container firewall).
 nomad_driver_denylist: [mock_driver, exec, java, qemu]
-nomad_docker_default_caps: [audit_write, chown, dac_override, fowner, fsetid, kill, mknod, net_bind_service, setfcap, setgid, setpcap, setuid, sys_chroot]
+# The capabilities a job may ADD with cap_add (plugin option allow_caps; always set, not left to nomad's default). Docker gives every container its own
+# default set anyway; this list is about jobs that drop everything and add back (the platform's jobs do). Compared with nomad's default it lacks
+# mknod, audit_write and setfcap. A job that needs one more: nomad_docker_extra_caps (per node) in the cluster's host_vars / group_vars.
+nomad_docker_default_caps: [chown, dac_override, fowner, fsetid, kill, net_bind_service, setgid, setpcap, setuid, sys_chroot]
 
 # nomad agents register themselves in consul with this token (minted by tofu-consul)
 nomad_consul_token: "{{ (cluster_consul_out.service_tokens | default({}))['nomad-agent'] | default('') }}"

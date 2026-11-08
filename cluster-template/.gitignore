@@ -15,3 +15,6 @@ backups/
 # client files of the VPN devices (wireguard private keys, client certificate keys): `task vpn:client`
 secrets/vpn/*
 !secrets/vpn/.gitkeep
+# bundles of `task project:export` (age encrypted, but they are meant for the project, not for this repo)
+secrets/projects/*
+!secrets/projects/.gitkeep

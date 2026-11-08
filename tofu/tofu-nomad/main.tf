@@ -136,6 +136,48 @@ resource "nomad_acl_token" "client" {
   policies = [each.value]
 }
 
+# ---- projects: CI and third party apps (docs/projects.md) ---------------------------------------------------------
+# A namespace, a policy that reaches that namespace and nothing else, and a token. The token is stable: it is only replaced when the project is
+# removed from cluster_projects, when the state is lost, or on purpose (`task project:rotate`), because it lives in the CI of someone else.
+locals {
+  default_capabilities = ["submit-job", "read-job", "list-jobs", "dispatch-job", "read-logs", "read-job-scaling", "scale-job", "alloc-lifecycle", "csi-mount-volume"]
+  projects = { for k, v in var.projects : k => {
+    namespace         = coalesce(v.namespace, k)
+    capabilities      = distinct(concat(local.default_capabilities, v.extra_capabilities))
+    host_volume_rules = join("\n", [for hv in v.host_volumes : "host_volume \"${hv}\" { policy = \"write\" }"])
+  } }
+}
+
+resource "nomad_namespace" "project" {
+  for_each    = local.projects
+  name        = each.value.namespace
+  description = "project ${each.key} (managed by opentofu)"
+}
+
+resource "nomad_acl_policy" "project" {
+  for_each    = local.projects
+  name        = "project-${each.key}"
+  description = "project ${each.key}: run and change jobs in the namespace ${each.value.namespace}, the variables of its jobs, nothing else"
+  rules_hcl   = <<-EOT
+    namespace "${each.value.namespace}" {
+      # no alloc-exec / alloc-node-exec by default (a shell in a container of the project), no sentinel-override
+      capabilities = ${jsonencode(each.value.capabilities)}
+      variables {
+        path "nomad/jobs/*" { capabilities = ["read", "write", "list", "destroy"] }
+      }
+    }
+    ${each.value.host_volume_rules}
+    node { policy = "read" }
+  EOT
+}
+
+resource "nomad_acl_token" "project" {
+  for_each = local.projects
+  name     = "${var.datacenter}-project-${each.key}"
+  type     = "client"
+  policies = [nomad_acl_policy.project[each.key].name]
+}
+
 # What the controller works with (tofu, backup, restore, the second factors) once the bootstrap token (`nomad acl bootstrap` with the pre-generated
 # secret) is handed over and deleted (role nomad_acl, tasks handover). Same power; the difference is that its secret is only in the encrypted state.
 resource "nomad_acl_token" "ops" {

@@ -183,6 +183,42 @@ tasks:
     cmds:
       - "{{.EXEC}} /work/base/scripts/vpn.sh list"
 
+  projects:
+    desc: "The projects (cluster_projects): namespace, whether the tokens exist, the VPN device"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/project.sh list"
+
+  project:vpn:
+    desc: "The VPN device of a project (project half of the address space): task project:vpn -- <name>, then task deploy:ansible"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/project.sh vpn {{.CLI_ARGS}}"
+
+  project:token:
+    desc: "Print the nomad token of a project (--consul: its consul token): task project:token -- <name>. A secret on stdout"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/project.sh token {{.CLI_ARGS}}"
+
+  project:export:
+    desc: "Hand a project its access: tar (nomad / consul token, VPN files, connect.sh) age encrypted to a recipient into secrets/projects/, e.g. task project:export -- nextcloud --age age1... ; --plain: base64 for a CI secret"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/project.sh export {{.CLI_ARGS}}"
+
+  project:rotate:
+    desc: "Replace the tokens of a project with the next deploy (the old ones stop working): task project:rotate -- <name>"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/project.sh rotate {{.CLI_ARGS}}"
+
+  project:revoke:
+    desc: "Remove the VPN device of a project: task project:revoke -- <name>, then task deploy:ansible"
+    deps: [up]
+    cmds:
+      - "{{.EXEC}} /work/base/scripts/project.sh revoke {{.CLI_ARGS}}"
+
   secrets:ensure:
     desc: Add secrets that a newer version of the platform needs to an existing secrets file (never changes existing ones)
     deps: [up]

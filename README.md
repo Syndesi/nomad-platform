@@ -70,6 +70,7 @@ interactive questions (`task authelia:user`, `task proxy:login`).
 |---|---|
 | [cluster-template/README.md](cluster-template/README.md) | step by step: configure, bootstrap nodes, deploy, operate (the guide) |
 | [docs/reference.md](docs/reference.md) | network, tokens, firewall, privilege escalation, docker volumes, logs, wireguard, backup and restore, extending |
+| [docs/projects.md](docs/projects.md) | scoped Nomad / Consul tokens and VPN devices for CI and third party apps: define, export, use |
 | [docs/contract.md](docs/contract.md) | what a cluster repo must contain, every variable, inventory groups, extension points |
 | [CHANGELOG.md](CHANGELOG.md) | what changed per version |
 

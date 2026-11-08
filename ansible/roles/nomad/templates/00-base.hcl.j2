@@ -4,6 +4,9 @@ region = "{{ cluster_region }}"
 datacenter = "{{ cluster_datacenter }}"
 data_dir = "{{ nomad_data_dir }}"
 log_level = "INFO"
+# no calls home: no check for new versions / security bulletins (and so no anonymous signature for it)
+disable_update_check = true
+disable_anonymous_signature = true
 
 # rpc and serf listen on the cluster address only; the http api there and on loopback (local cli, tunnels, traefik)
 bind_addr = "{{ nomad_ip }}"

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # The VPN of the internal services (zone <cluster_name>.internal): keys, devices, client files. Runs inside the tools container, via `task vpn:*`.
 #   vpn.sh init              the server's wireguard key pair (ONCE; inventory/group_vars/all/vpn.sops.yml, sops/age)
-#   vpn.sh client <device>   a new device: wireguard key pair + preshared key + address, a client certificate for the wstunnel gate (CN = device),
+#   vpn.sh client <device> [--project]   a new device: wireguard key pair + preshared key + address, a client certificate for the wstunnel gate (CN = device),
 #                            all files under secrets/vpn/<device>/ (git-ignored). An existing device gets a new certificate only (the cert
 #                            lives cluster_vpn_client_valid_days; run it again before it expires). The peer reaches the server with the next deploy.
+#                            --project: the device of a project (CI, third party app): an address of the project half of the subnet (cluster_vpn_project_first
+#                            and up), which reaches nomad-api. / consul-api.<zone> with an ACL token and not the ops UIs. `task project:vpn` calls it.
+#                            Every device also gets connect.sh / disconnect.sh (up and down without installing anything: CI runners).
 #   vpn.sh revoke <device>   remove the peer. This is the revocation: the wireguard key is the real gate, the certificate only gets through the disguise
 #   vpn.sh list              devices, addresses, certificate expiry
 #   vpn.sh check             print a warning for every client certificate that expires within cluster_vpn_client_warn_days (exit 0 either way)
@@ -44,6 +47,7 @@ case "${1:-}" in
 
   client)
     dev=${2:?device name}; valid_name "$dev"; need_file
+    project=false; [ "${3:-}" = "--project" ] && project=true
     name=$(cvar cluster_name); zone=$(cvar cluster_internal_zone); host=$(cvar cluster_vpn_host); subnet=$(cvar cluster_vpn_subnet)
     server_ip=$(cvar cluster_vpn_server_ip); mtu=$(cvar cluster_vpn_mtu); days=$(cvar cluster_vpn_client_valid_days)
     base=${subnet%.*}   # a /24: a.b.c
@@ -55,8 +59,10 @@ case "${1:-}" in
     # --- wireguard: a new device gets a key pair, a preshared key and the next free address; the private key only goes into the client file
     if [ -z "$existing" ]; then
       used=$(jq -r '.[].ip' <<<"$state")
-      ip=""; for n in $(seq 2 254); do grep -qx "$base.$n" <<<"$used" || { ip="$base.$n"; break; }; done
-      [ -n "$ip" ] || die "the subnet $subnet is full"
+      pfirst=$(cvar cluster_vpn_project_first)
+      if [ "$project" = true ]; then lo=$pfirst; hi=254; else lo=2; hi=$((pfirst - 1)); fi
+      ip=""; for n in $(seq "$lo" "$hi"); do grep -qx "$base.$n" <<<"$used" || { ip="$base.$n"; break; }; done
+      [ -n "$ip" ] || die "the $([ "$project" = true ] && echo project || echo people) half of the subnet $subnet is full"
       priv=$(wg genkey); pub=$(printf '%s' "$priv" | wg pubkey); psk=$(wg genpsk)
       new=true
     else
@@ -195,10 +201,44 @@ HOOK
 chmod 755 /etc/NetworkManager/dispatcher.d/pre-up.d/50-wstunnel-$iface /etc/NetworkManager/dispatcher.d/pre-down.d/50-wstunnel-$iface
 echo "connection $iface imported: nmcli connection up $iface"
 EOF
-    chmod 600 "$out"/*; chmod 755 "$out/install.sh" "$out/nm-install.sh"
+    # --- start / teardown without installing anything (CI): a wg config without hooks and dns, the two scripts, their parameters
+    [ "${#iface}" -le 15 ] || die "the interface name $iface is longer than 15 characters: shorten cluster_name"
+    mkdir -p "$out/ci"; chmod 700 "$out/ci"
+    if [ "$new" = true ]; then
+      cat > "$out/ci/$iface.conf" <<EOF
+# wg-quick config for connect.sh (CI): no hooks (connect.sh starts wstunnel itself) and no DNS (it writes the API names to /etc/hosts).
+[Interface]
+PrivateKey = $priv
+Address = $ip/32
+MTU = $mtu
+
+[Peer]
+PublicKey = $server_pub
+PresharedKey = $psk
+Endpoint = 127.0.0.1:$lport
+AllowedIPs = $server_ip/32
+PersistentKeepalive = 25
+EOF
+    fi
+    wst_image=$(cvar cluster_wstunnel_image)
+    cat > "$out/connect.env" <<EOF
+# parameters of connect.sh / disconnect.sh (device $dev)
+CLUSTER=$name
+ZONE=$zone
+IFACE=$iface
+SERVER_IP=$server_ip
+WSTUNNEL_SERVER=$host
+LOCAL_PORT=$lport
+WG_PORT=$(cvar cluster_vpn_wg_port)
+WSTUNNEL_IMAGE=$wst_image
+WSTUNNEL_VERSION=${wst_image##*:}
+HOSTS="nomad-api.$zone consul-api.$zone"
+EOF
+    cp "$(dirname "$0")/vpn-client/connect.sh" "$(dirname "$0")/vpn-client/disconnect.sh" "$out/"
+    find "$out" -type f -exec chmod 600 {} +; chmod 700 "$out" "$out/ci"; chmod 755 "$out/install.sh" "$out/nm-install.sh" "$out/connect.sh" "$out/disconnect.sh"
     if [ "$new" = true ]; then echo "device $dev: address $ip, files in $out/ (private keys inside: keep them off shared disks)"; else echo "device $dev: certificate renewed, files in $out/ (the wireguard config of the device stays as it is)"; fi
     echo "certificate valid until $expires"
-    echo "next: task deploy:ansible (the server learns the peer), then on the device: sudo sh install.sh"
+    echo "next: task deploy:ansible (the server learns the peer), then on the device: sudo sh install.sh  (CI: bash connect.sh ... bash disconnect.sh, no install)"
     ;;
 
   revoke)
@@ -215,7 +255,8 @@ sys.stdout.write("---\n" + yaml.safe_dump(d, default_flow_style=False))' | write
 
   list)
     need_file
-    peers_json | jq -r '.[] | [.name, .ip, .cert_expires] | @tsv' | column -t -s "$(printf '\t')" || true
+    pfirst=$(cvar cluster_vpn_project_first)
+    peers_json | jq -r --argjson pf "$pfirst" '.[] | [.name, .ip, (if ((.ip | split(".") | last | tonumber) >= $pf) then "project" else "people" end), .cert_expires] | @tsv' | { column -t -s "$(printf '\t')" 2>/dev/null || cat; }
     ;;
 
   check)
@@ -229,5 +270,5 @@ sys.stdout.write("---\n" + yaml.safe_dump(d, default_flow_style=False))' | write
     done
     ;;
 
-  *) echo "usage: $0 init | client <device> | revoke <device> | list | check" >&2; exit 2 ;;
+  *) echo "usage: $0 init | client <device> [--project] | revoke <device> | list | check" >&2; exit 2 ;;
 esac

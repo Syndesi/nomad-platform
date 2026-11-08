@@ -18,6 +18,8 @@ Inside the tools container the cluster repo is `/work`, the platform `/work/base
 | `pki/{ca,intermediate-ansible,intermediate-stepca}.pem` | the offline root and the two intermediates (public), made by `task pki:ca`; the keys are in `ca.sops.yml` (ansible intermediate), `stepca.sops.yml` (step-ca intermediate) and `pki/root.sops.yml` (root; not read by any deploy, keep it offline) |
 | `inventory/group_vars/all/{vpn,stepca-material}.sops.yml` | made by `task vpn:init` (server key, devices) and `task stepca:init` (password, provisioner keys), sops/age encrypted, committed |
 | `secrets/vpn/` | client files of the VPN devices (gitignored: private keys), made by `task vpn:client` |
+| `secrets/projects/` | bundles of `task project:export` (age encrypted to the receiver; gitignored) |
+| `inventory/group_vars/all/projects.yml` | optional: `cluster_projects`, see `docs/projects.md` |
 | `state/` | state and plugin dir of the two tofu roots; the states are client side encrypted, so they may be committed |
 | `secrets/age/` | the age private key (gitignored; keep a copy in a password manager and offline) |
 | `secrets/ssh/` | the ssh key ansible and the scripts log in with, made by `task ssh:init` or your own (`task ssh:init -- <key>`; no passphrase; its type must be in `cluster_ssh_pubkey_algorithms`) (gitignored) |
@@ -61,11 +63,11 @@ A cluster whose nodes are not routable can add lines to the controller's ssh con
 are renewed once half of this is over), `cluster_nomad_http_port`, `cluster_consul_https_port`, `cluster_traefik_image`,
 `cluster_authelia_image`, `cluster_dns_upstreams_override`, `cluster_node_domain` (default `cluster_domain`; names the nodes in their certificates), `cluster_host_volumes` (per node: `[{name, path, read_only}]`),
 `cluster_ansible_user`, `cluster_ssh_authorized_keys`, `cluster_interface` (per node: the cluster network's interface, default the default route's),
-`cluster_docker_volumes_enabled` (default false), `cluster_docker_daemon_extra`, `cluster_log_retention_days` (7), `cluster_consul_task_kv_prefixes` (none),
+`cluster_docker_volumes_enabled` (default false), `cluster_docker_daemon_extra`, `cluster_docker_nofile` (1048576), `cluster_log_retention_days` (7), `cluster_consul_task_kv_prefixes` (none),
 `cluster_traefik_wireguard` / `cluster_wireguard_image` (see the README), `cluster_ssh_key_file`, `cluster_ssh_kex`, `cluster_ssh_ciphers`,
 `cluster_ssh_host_key_algorithms`, `cluster_ssh_pubkey_algorithms`, `cluster_ssh_config_extra`, `cluster_reboot_allowed`,
 `authelia_internal_extra_rules` (rules of your own internal apps behind the VPN), `cluster_internal_zone` (default `<cluster_name>.internal`),
-`cluster_vpn_subnet` (a `x.y.z.0/24`, distinct per cluster), `cluster_vpn_*` (host, ports, MTU, client certificate lifetime), `cluster_stepca_enabled` (default true) and
+`cluster_vpn_subnet` (a `x.y.z.0/24`, distinct per cluster), `cluster_vpn_*` (host, ports, MTU, client certificate lifetime, `cluster_vpn_project_first`), `cluster_projects` (`docs/projects.md`), `cluster_stepca_enabled` (default true) and
 `cluster_stepca_*`, `authelia_internal_totp_seeds`, and the role defaults (`nomad_*`, `consul_*`). Inventory sources are merged in order (`ansible.cfg`: base first, cluster
 second), so the cluster wins. Paths follow a fixed layout below `cluster_dir` (the cluster repo as the tools container
 sees it); there is no path variable to set.
