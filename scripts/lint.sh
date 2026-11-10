@@ -14,7 +14,7 @@ step() { # <name> <command...>
 # lint the base (its code), with the cluster's inventory for the syntax check
 step ansible-lint bash -c "cd $BASE/ansible && ansible-lint --nocolor playbooks roles"
 step yamllint yamllint -c "$BASE/ansible/.yamllint.yml" "$BASE/ansible/inventory" "$BASE/ansible/playbooks" "$BASE/ansible/roles" "$BASE/ansible/templates" "$BASE/ansible/requirements.yml" "$BASE/tofu"
-step shellcheck shellcheck -x -P SCRIPTDIR "$BASE"/scripts/*.sh
+step shellcheck shellcheck -x -P SCRIPTDIR "$BASE"/scripts/*.sh "$BASE"/dev/*.sh "$BASE"/dev/remote/*.sh
 for d in tofu-consul tofu-nomad; do
   step "tofu fmt $d" tofu -chdir="$BASE/tofu/$d" fmt -check -diff
   # the roots have a local backend whose state lives in the cluster repo: validate without it

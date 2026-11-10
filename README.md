@@ -73,6 +73,7 @@ interactive questions (`task authelia:user`, `task proxy:login`).
 | [docs/projects.md](docs/projects.md) | scoped Nomad / Consul tokens and VPN devices for CI and third party apps: define, export, use |
 | [docs/contract.md](docs/contract.md) | what a cluster repo must contain, every variable, inventory groups, extension points |
 | [CHANGELOG.md](CHANGELOG.md) | what changed per version |
+| [CLAUDE.md](CLAUDE.md) | working on this repo against a test cluster (also for humans): the loop, `dev/` tools, failure modes, shell pitfalls |
 
 ## Known issues and open items
 

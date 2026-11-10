@@ -1,0 +1,30 @@
+version: "3"
+
+# Local development of the platform against a throw-away test cluster. NOT part of the platform's tasks and no deployment uses it: a cluster repo
+# that wants it includes this file under a namespace (the test cluster does):
+#   includes:
+#     dev:
+#       taskfile: base/dev/Taskfile.yml
+#       dir: .
+# Everything here runs on the host, from the cluster repo, and goes through its long-running tools container. See CLAUDE.md.
+
+tasks:
+  doctor:
+    desc: "Can I work on the test cluster now? Checks the sandbox (machine layer, tools container, base/ in sync, ssh, settled). '-- --fix' repairs the safe parts"
+    cmds:
+      - base/dev/doctor.sh {{.CLI_ARGS}}
+
+  wait:
+    desc: "Wait until the cluster has settled after a restart or an interrupted deploy: task dev:wait -- [seconds, default 600]. Run it in the background"
+    cmds:
+      - base/dev/wait.sh {{.CLI_ARGS}}
+
+  job:
+    desc: "Fast loop for ONE job file (seconds, not a 20 minute deploy): task dev:job -- <job> [--file <file>] [--restart] [--patient] [--timeout s]"
+    cmds:
+      - base/dev/job.sh {{.CLI_ARGS}}
+
+  x:
+    desc: "A command on the server with the ops tokens, no quoting trouble: task dev:x -- 'nomad job status' (script on stdin: base/dev/x.sh <<'EOF'; -r root, -n node)"
+    cmds:
+      - base/dev/x.sh {{.CLI_ARGS}}
