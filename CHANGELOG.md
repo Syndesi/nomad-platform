@@ -4,6 +4,22 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- **wstunnel and certificate renewal (open):** wstunnel reads its certificate once and gVisor delivers no file change notifications across sandboxes, so a renewed certificate is only used after a restart of the job.
+  A restart on renewal (a Nomad template watching a file bumped by `step ca renew --exec`) does not work: the template file sandbox only allows the task directory, not the allocation's shared directory (tested). It would need `template.disable_file_sandbox` on the clients, which is too broad.
+- **Post-quantum TLS in Consul:** `tls_ecdh_curves = "X25519MLKEM768,X25519"` for the agents (`tls.defaults`) and TLS 1.3 as the minimum on `internal_rpc` and `https` (not on `grpc`: the Envoy sidecars cannot reach it then) and a `mesh` config entry with the same for the Envoy sidecars (tofu-consul).
+- **Certificate expiry alerts:** Gatus checks `[CERTIFICATE_EXPIRATION] > 96h` on the Nomad and Consul https ports of every node (group `certificates`); the existing Prometheus rule on failed Gatus endpoints sends it to ntfy. The intermediate CAs are not covered yet (`task pki:info`, `task maintenance`).
+- **Service tags are validated** before they end up in the Vector config / VRL (`metrics.path`, `metrics.scheme`, `metrics.job`) and in Gatus' YAML (host names from `traefik...rule=Host(...)` tags); values are quoted with `toJSON`.
+- **Smaller:** the Alertmanager config (ntfy token) is `0400`; DHCP replies are accepted from the uplink interface only; docs: seccomp / AppArmor do not apply to containers in gVisor, Grafana verifies TLS, `--host-uds=open` explained.
+
+- **Authelia on Postgres and Redis (job `authelia-db`)**: the sqlite database could not be dumped reliably from a second sandbox (gVisor keeps file locks per sandbox). One Postgres (a database
+  and user per instance) and one Redis (sessions, a database index per instance) run on runc next to Authelia and are reached through the mesh only (services `authelia-postgres` /
+  `authelia-redis`, upstreams in the sidecars of both Authelias, intentions in tofu-consul). The Authelia groups are always in `bridge` mode now (the `mesh` variable is gone). `task backup` makes a
+  `pg_dump` of both databases (`authelia-db-<instance>.sql.age`), `task restore` replays it; `cluster_sqlite_image` is gone. New secrets (`task secrets:ensure`): `cluster_authelia_postgres_password`,
+  `cluster_authelia_db_password`, `cluster_authelia_internal_db_password`, `cluster_authelia_redis_password`. **No migration of an existing sqlite database** (the deploy registers the TOTP seeds again,
+  devices and bans are lost). Costs about 0.5 GB of memory on the Authelia node.
+- **ntfy only through the mesh**: no published port; Traefik (`traefik-mesh`, was `traefik-acme`) and the monitoring allocation reach it through Consul Connect (intentions in tofu-consul), the router
+  for `ntfy.<domain>` is in Traefik's file provider, and ntfy ignores `X-Forwarded-For`. `cluster_monitoring_ntfy_port` is now the local port of the upstream.
+
 - **gVisor is the default docker runtime** (role `gvisor`, `docs/reference.md` "Containers in gVisor", `cluster_gvisor_*`): `runsc` is built from source by `task build` (`binaries/Dockerfile.gvisor`,
   new `.env` variables `GVISOR_VERSION` and `GVISOR_GO_COMMIT`, **add them to the `.env` of every cluster**), installed on the client nodes and registered as docker runtimes `runsc-host` (the default: gVisor on the
   network of the group's namespace, works with Connect sidecars and all firewall rules), `runsc` (own network stack, one container per namespace) and the unchanged `runc` (opt out with

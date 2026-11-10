@@ -86,6 +86,47 @@
     loop_var: cluster_jobs_item
     label: "{{ cluster_jobs_item.name }}"
 
+# Authelia's databases from the backup (task restore): authelia-db is up and has made the empty databases (and authelia has migrated its schema); the dump drops
+# and recreates the tables (pg_dump --clean). Then both authelias restart and read it. A backup without it is not an error: the second factors are registered
+# again from the seeds, only the device list and the bans are lost.
+- name: Authelia's databases from the backup (task restore)
+  when: cluster_restore_dir | length > 0
+  block:
+    - name: The backup has them
+      ansible.builtin.stat:
+        path: "{{ cluster_restore_dir }}/authelia-db-{{ item }}.sql.age"
+      delegate_to: localhost
+      become: false
+      loop: [authelia, authelia-internal]
+      register: cluster_jobs_authelia_dumps
+
+    - name: Replay them
+      when: cluster_jobs_authelia_dumps.results | selectattr('stat.exists') | list | length > 0
+      block:
+        - name: Postgres of authelia-db is running
+          ansible.builtin.shell: >-
+            docker ps -q --filter label=com.hashicorp.nomad.job_name=authelia-db --filter label=com.hashicorp.nomad.task_name=postgres | head -1
+          register: cluster_jobs_authelia_pg
+          until: cluster_jobs_authelia_pg.stdout | length > 0
+          retries: 30
+          delay: 5
+          changed_when: false
+          delegate_to: "{{ cluster_authelia_hosts[0] }}"
+          become: true
+
+        - name: Replay one dump per instance
+          ansible.builtin.include_tasks: authelia-db-restore.yml
+          loop: "{{ cluster_jobs_authelia_dumps.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+          loop_control:
+            loop_var: cluster_jobs_authelia_inst
+            label: "{{ cluster_jobs_authelia_inst }}"
+
+        - name: Both authelias read it
+          ansible.builtin.command: "nomad job restart -yes {{ item }}"
+          environment: "{{ cluster_jobs_env }}"
+          loop: [authelia, authelia-internal]
+          changed_when: true
+
 # Grafana's database from the backup (task restore): the stack is up and has made empty tables; the dump drops and recreates them (pg_dump --clean).
 # A backup without it is not an error: the dashboards are gone, everything else is as before.
 - name: Grafana's database from the backup (task restore)

@@ -159,11 +159,16 @@ variable "tls_fingerprint" {
   default = ""
 }
 # step-ca (the always-online intermediate CA, reached through the Consul mesh): the ACME directory of the resolver "stepca" for the names of the
-# internal zone ("" = no step-ca: the zone's wildcard certificate from the node is used). The service "traefik-acme" below is the mesh identity of
+# internal zone ("" = no step-ca: the zone's wildcard certificate from the node is used). The service "traefik-mesh" below is the mesh identity of
 # this group (the only one step-ca's intentions let in) and gives it the upstream 127.0.0.1:9000 = step-ca.
 variable "stepca_acme_url" {
   type    = string
   default = ""
+}
+# ntfy (the public notification service, reached through the mesh only): the local port of its upstream in this group's namespace, 0 = no ntfy
+variable "ntfy_port" {
+  type    = number
+  default = 0
 }
 variable "stepca_image" {
   type    = string
@@ -281,12 +286,12 @@ job "traefik" {
     }
 
     # The mesh identity of this group, upstream only: step-ca (127.0.0.1:9000 in the namespace) for traefik's ACME client and the renewal of
-    # wstunnel's certificate. Consul's intentions decide who may talk to step-ca (tofu-consul): this service and nobody else. The port is nominal
-    # (nothing listens there and no intention lets anybody connect to this service).
+    # wstunnel's certificate, and ntfy (127.0.0.1:<ntfy_port>, the router for ntfy.<domain> is in the file provider). Consul's intentions decide who may
+    # talk to them (tofu-consul): this service and nobody else. The port is nominal (nothing listens there and no intention lets anybody connect to this service).
     dynamic "service" {
-      for_each = var.stepca_acme_url != "" ? ["stepca"] : []
+      for_each = (var.stepca_acme_url != "" || var.ntfy_port > 0) ? ["mesh"] : []
       content {
-        name     = "traefik-acme"
+        name     = "traefik-mesh"
         port     = "9"
         provider = "consul"
         tags     = []
@@ -294,9 +299,19 @@ job "traefik" {
         connect {
           sidecar_service {
             proxy {
-              upstreams {
-                destination_name = "step-ca"
-                local_bind_port  = 9000
+              dynamic "upstreams" {
+                for_each = var.stepca_acme_url != "" ? ["step-ca"] : []
+                content {
+                  destination_name = upstreams.value
+                  local_bind_port  = 9000
+                }
+              }
+              dynamic "upstreams" {
+                for_each = var.ntfy_port > 0 ? ["ntfy"] : []
+                content {
+                  destination_name = upstreams.value
+                  local_bind_port  = var.ntfy_port
+                }
               }
             }
           }
@@ -557,6 +572,9 @@ EOT
         gid         = parseint(var.vpn_wstunnel_user, 10)
       }
 
+      # Known gap: wstunnel reads its certificate once and is not restarted when vpn-renew renews it (a restart of the job picks the new one up). Nomad
+      # templates can only read files in their own task directory (file sandbox), and gVisor delivers no file change notifications across sandboxes.
+
       env {
         RUST_LOG        = "info"
         TLS_FINGERPRINT = var.tls_fingerprint
@@ -704,6 +722,7 @@ EOT
         TPL_PUBLIC_WRITE_TIMEOUT   = var.public_write_timeout
         TPL_PUBLIC_INFLIGHT        = var.public_inflight
         TPL_STEPCA_ACME_URL        = var.stepca_acme_url
+        TPL_NTFY_PORT              = var.ntfy_port
         TPL_STEPCA_HOURS           = var.stepca_cert_hours
         # lego (traefik's ACME client) trusts the cluster root in addition to the system roots: step-ca's own certificate is signed by it
         LEGO_CA_CERTIFICATES = "/secrets/ca.pem"

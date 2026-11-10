@@ -8,8 +8,11 @@ tls {
     verify_incoming = true
 {% endif %}
     verify_outgoing = true
+    # the hybrid post-quantum key exchange first (X25519 + ML-KEM-768), classical X25519 as the fallback (Consul 2.1 and later)
+    tls_ecdh_curves = "X25519MLKEM768,X25519"
   }
   internal_rpc {
+    tls_min_version = "TLSv1_3"
     verify_server_hostname = true
   }
   grpc {
@@ -18,7 +21,10 @@ tls {
     key_file = "{{ cluster_tls_dir }}/consul-grpc.key"
     verify_incoming = false
   }
+  # No tls_min_version for grpc: the Envoy sidecars fetch their configuration from it, and with TLS 1.3 as the minimum Envoy's connection to the agent fails
+  # (tested with Consul 2.1.0: the sidecar never gets its listeners). So the minimum is set on the listeners one by one, not in defaults.
   https {
+    tls_min_version = "TLSv1_3"
     # auto_encrypt certs come from consul's own connect CA, so the local https api (used by
     # nomad, traefik, the cli) serves the node leaf cert signed by the cluster CA instead
     cert_file = "{{ cluster_tls_dir }}/consul.pem"

@@ -161,6 +161,7 @@
           - authelia_users | difference((authelia_totp_seeds | default({})).keys() | list) | length == 0
           - authelia_users | difference((authelia_internal_totp_seeds | default({})).keys() | list) | length == 0
           - cluster_authelia_internal_session_secret is defined
+          - cluster_authelia_postgres_password is defined and cluster_authelia_db_password is defined and cluster_authelia_internal_db_password is defined and cluster_authelia_redis_password is defined
           - not (cluster_monitoring_enabled | bool) or (cluster_monitoring_postgres_password is defined and cluster_monitoring_ntfy_alertmanager_token is defined and cluster_monitoring_grafana_admin_password is defined)
         fail_msg: >-
           Every authelia_access_rules / authelia_internal_access_rules entry must have policy two_factor, deny or bypass (a public route; first_factor alone needs cluster_authelia_allow_weaker_policies: true), and every
@@ -507,27 +508,13 @@
           delay: 2
           changed_when: false
 
-# On the clients and not on the servers: authelia's and step-ca's nodes are clients (checked above), but not necessarily servers (the ingress node is
-# authelia's by default). The folders are made here if the nomad role (which runs after this play on a client that is not a server) has not yet.
-- name: Restore the authelia folders (task restore)
+# On the clients and not on the servers: step-ca's node is a client (checked above), but not necessarily a server. (Authelia's databases are replayed by
+# the role cluster_jobs, when the database job runs.)
+- name: Restore the step-ca database (task restore)
   hosts: cluster_clients
   become: true
   gather_facts: false
   tasks:
-    - name: Authelia folders of the backup (both instances)
-      ansible.builtin.include_role:
-        name: cluster_restore
-        tasks_from: authelia
-      vars:
-        cluster_restore_inst: "{{ restore_inst }}"
-      loop:
-        - { name: authelia, dir: "{{ cluster_authelia_dir }}" }
-        - { name: authelia-internal, dir: "{{ cluster_authelia_internal_dir }}" }
-      loop_control:
-        loop_var: restore_inst
-        label: "{{ restore_inst.name }}"
-      when: cluster_restore_dir | length > 0 and inventory_hostname in cluster_authelia_hosts
-
     - name: Step-ca database from the backup
       ansible.builtin.include_role:
         name: cluster_restore

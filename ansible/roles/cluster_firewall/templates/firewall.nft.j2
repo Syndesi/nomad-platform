@@ -15,8 +15,9 @@ table inet {{ cluster_firewall_table }} {
     # icmp (ping, path mtu) and ipv6 neighbour discovery; replies of the dhcp servers
     ip protocol icmp accept
     ip6 nexthdr icmpv6 accept
-    udp sport 67 udp dport 68 accept
-    udp sport 547 udp dport 546 accept
+    # DHCP replies: from the uplink only (not from the container bridges or any other interface)
+    iifname "{{ cluster_interface_effective }}" udp sport 67 udp dport 68 accept
+    iifname "{{ cluster_interface_effective }}" udp sport 547 udp dport 546 accept
 
     # ssh from anywhere, except from the container bridges (a compromised workload gets no path to sshd)
     iifname { "docker0", "nomad", "br-*" } tcp dport 22 drop

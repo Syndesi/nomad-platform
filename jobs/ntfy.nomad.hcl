@@ -2,7 +2,9 @@
 # Access is ntfy's own: `auth-default-access: deny-all`, no sign-up; the users and the token are provisioned from the Nomad variable nomad/jobs/ntfy
 # (tofu-nomad): `admin` (you: the web app / phone) and `alertmanager` (a token that can only write to the topic `alerts`).
 # Because it is public the authelia rule for ntfy.<domain> is a bypass (the platform adds it, authelia_access_rules): the forward-auth of the public entry point
-# cannot be answered by the ntfy app. The host port (cluster network only) is for Alertmanager and the status page, which talk to ntfy directly.
+# cannot be answered by the ntfy app. ntfy has NO published port: the only way in is its Consul Connect sidecar (mesh service "ntfy"). Intentions (tofu-consul):
+# Traefik's group (the public name) and the monitoring server's group (Alertmanager, status page) may connect, nobody else. ntfy ignores X-Forwarded-For
+# (no behind-proxy): every request comes from the sidecar, so a client cannot choose the address that ntfy sees.
 # Runs on the node of the monitoring server (client meta monitoring = true). Docs: docs/monitoring.md
 
 variable "datacenter" {
@@ -17,10 +19,6 @@ variable "tls_resolver" {
 }
 variable "image" {
   type = string
-}
-variable "port" {
-  type    = number
-  default = 8580
 }
 variable "uid" {
   type    = string
@@ -43,10 +41,6 @@ job "ntfy" {
 
     network {
       mode = "bridge"
-      port "http" {
-        static = var.port
-        to     = 8080
-      }
       port "metrics" {
         to = 9090
       }
@@ -64,18 +58,27 @@ job "ntfy" {
 
     service {
       name     = "ntfy"
-      port     = "http"
+      port     = "8080"
       provider = "consul"
-      tags = [
-        "traefik.enable=true",
-        "traefik.http.routers.ntfy.rule=Host(`ntfy.${var.domain}`)",
-        "traefik.http.routers.ntfy.entrypoints=websecure",
-        "traefik.http.routers.ntfy.tls=true",
-        "traefik.http.routers.ntfy.tls.certresolver=${var.tls_resolver}",
-      ]
+      tags     = []
+      connect {
+        sidecar_service {}
+        # runc: envoy is the network heavy part and a hardened, well audited image; the app stays in gVisor (cluster_gvisor_*)
+        sidecar_task {
+          # default of nomad is 250 MHz; the node is booked out otherwise
+          resources {
+            cpu    = 100
+            memory = 128
+          }
+          config {
+            runtime = "runc"
+          }
+        }
+      }
       check {
         type     = "http"
         path     = "/v1/health"
+        expose   = true
         interval = "30s"
         timeout  = "5s"
       }
@@ -100,7 +103,6 @@ job "ntfy" {
       env {
         NTFY_BASE_URL             = "https://ntfy.${var.domain}"
         NTFY_LISTEN_HTTP          = ":8080"
-        NTFY_BEHIND_PROXY         = "true"
         NTFY_CACHE_FILE           = "/var/lib/ntfy/cache.db"
         NTFY_ATTACHMENT_CACHE_DIR = "/var/lib/ntfy/attachments"
         NTFY_AUTH_FILE            = "/var/lib/ntfy/user.db"
@@ -137,7 +139,7 @@ job "ntfy" {
       config {
         image           = var.image
         args            = ["serve", "--config", "/secrets/server.yml"]
-        ports           = ["http", "metrics"]
+        ports           = ["metrics"]
         cap_drop        = ["ALL"]
         readonly_rootfs = true
       }

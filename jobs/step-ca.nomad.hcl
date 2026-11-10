@@ -3,7 +3,7 @@
 # the service certificates (wstunnel) and, through `nomad alloc exec`, the certificates of the VPN devices.
 # Never reachable from outside its allocation, except through the Consul service mesh:
 #   - it listens on 127.0.0.1:9000 in its own (bridge) network namespace; there is no Nomad port, no host port;
-#   - the only way in is its Connect sidecar, and Consul's intentions are deny by default: only the service "traefik-acme" (traefik's group)
+#   - the only way in is its Connect sidecar, and Consul's intentions are deny by default: only the service "traefik-mesh" (traefik's group)
 #     may connect (tofu-consul);
 #   - operators reach it with `nomad alloc exec` (management token), i.e. inside the namespace.
 # The dnsmasq next to it is the resolver for the ACME validation (step-ca --resolver): every name in the zone resolves to the ingress node's cluster

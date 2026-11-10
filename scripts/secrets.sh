@@ -83,6 +83,11 @@ cluster_authelia_reset_password_jwt_secret: "$(string)"
 cluster_authelia_internal_session_secret: "$(string)"
 cluster_authelia_internal_storage_encryption_key: "$(string)"
 cluster_authelia_internal_reset_password_jwt_secret: "$(string)"
+# The databases of both Authelias (job authelia-db): the superuser of Postgres, one user per instance, the password of Redis (sessions)
+cluster_authelia_postgres_password: "$(string)"
+cluster_authelia_db_password: "$(string)"
+cluster_authelia_internal_db_password: "$(string)"
+cluster_authelia_redis_password: "$(string)"
 # Monitoring (docs/monitoring.md): database, Grafana, the OIDC client of Grafana at authelia-internal, ntfy
 $(monitoring_json | python3 -c 'import sys,json; [print("%s: %s" % (k, json.dumps(v))) for k, v in json.load(sys.stdin).items()]')
 YAML
@@ -92,7 +97,7 @@ YAML
   ensure)
     # secrets that later versions need, added to an existing file (existing values are never touched)
     [ -e "$FILE" ] || { echo "$FILE does not exist: task secrets:init" >&2; exit 1; }
-    for k in cluster_authelia_internal_session_secret cluster_authelia_internal_storage_encryption_key cluster_authelia_internal_reset_password_jwt_secret; do
+    for k in cluster_authelia_internal_session_secret cluster_authelia_internal_storage_encryption_key cluster_authelia_internal_reset_password_jwt_secret cluster_authelia_postgres_password cluster_authelia_db_password cluster_authelia_internal_db_password cluster_authelia_redis_password; do
       if ! sops --decrypt --extract "[\"$k\"]" "$FILE" >/dev/null 2>&1; then
         sops set "$FILE" "[\"$k\"]" "\"$(string)\""
         echo "added $k"

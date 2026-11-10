@@ -41,6 +41,12 @@ variable "traefik_consul_token" {
   sensitive   = true
 }
 
+variable "authelia_db_items" {
+  type        = map(string)
+  sensitive   = true
+  description = "items of the nomad variable nomad/jobs/authelia-db (postgres_password, authelia_password, authelia_internal_password, redis_password)"
+}
+
 variable "authelia_configuration" {
   type      = string
   sensitive = true

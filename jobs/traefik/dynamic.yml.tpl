@@ -77,6 +77,15 @@ http:
       service: consul
       rule: Host(`consul-api.{{ $zone }}`)
       tls: { options: default{{ with $stepca }}, certResolver: stepca{{ end }} }
+{{- if ne (env "TPL_NTFY_PORT") "0" }}
+    # ntfy (public, its own login; authelia has a bypass rule for the name): through the mesh, the upstream is 127.0.0.1:TPL_NTFY_PORT in this namespace.
+    # Not in ntfy's consul tags: tags are written by whoever submits a job.
+    ntfy:
+      entryPoints: [websecure]
+      service: ntfy
+      rule: Host(`ntfy.{{ env "TPL_DOMAIN" }}`)
+      tls: { options: default{{ with $resolver }}, certResolver: {{ . }}{{ end }} }
+{{- end }}
 {{- with env "TPL_GRAFANA_ADDR" }}
     # the monitoring server (docs/monitoring.md): Grafana (its own login is authelia's OpenID Connect) and the status page
     grafana:
@@ -203,6 +212,13 @@ http:
         serversTransport: cluster-ca
         servers:
           - url: https://{{ $host }}:{{ env "TPL_CONSUL_PORT" }}
+{{- if ne (env "TPL_NTFY_PORT") "0" }}
+    ntfy:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://127.0.0.1:{{ env "TPL_NTFY_PORT" }}
+{{- end }}
 {{- with env "TPL_GRAFANA_ADDR" }}
     grafana:
       loadBalancer:

@@ -64,12 +64,23 @@ variable "ingress_addr" {
 variable "authelia_internal_addr" {
   type = string
 }
-variable "ntfy_addr" {
-  type = string
+# the local port of the ntfy upstream in this allocation (the sidecar of monitoring-grafana-mesh); Alertmanager and Gatus talk to ntfy on 127.0.0.1:<port>
+variable "ntfy_port" {
+  type    = number
+  default = 8580
 }
 variable "ntfy_topic" {
   type    = string
   default = "alerts"
+}
+# the https ports of the agents on every node (Gatus watches the expiry of their certificates)
+variable "nomad_port" {
+  type    = number
+  default = 4646
+}
+variable "consul_port" {
+  type    = number
+  default = 8501
 }
 # uids of the images (the host volumes belong to them, nomad role)
 variable "uid_postgres" {
@@ -224,6 +235,11 @@ job "monitoring-server" {
             upstreams {
               destination_name = "authelia-internal-mesh"
               local_bind_port  = 443
+            }
+            # ntfy (where Alertmanager sends the alerts, and the status page checks it): mesh only, intentions allow this service (tofu-consul)
+            upstreams {
+              destination_name = "ntfy"
+              local_bind_port  = var.ntfy_port
             }
           }
         }
@@ -573,7 +589,7 @@ job "monitoring-server" {
             - name: ntfy
               webhook_configs:
                 # ntfy formats the alertmanager payload itself (template=alertmanager)
-                - url: http://${var.ntfy_addr}/${var.ntfy_topic}?template=alertmanager
+                - url: http://127.0.0.1:${var.ntfy_port}/${var.ntfy_topic}?template=alertmanager
                   send_resolved: true
                   http_config:
                     authorization:
@@ -581,7 +597,9 @@ job "monitoring-server" {
                       credentials: "{{ with nomadVar "nomad/jobs/monitoring-server" }}{{ .ntfy_token }}{{ end }}"
         EOT
         destination = "secrets/alertmanager.yml"
-        perms       = "0644"
+        perms       = "0400"
+        uid         = parseint(var.uid_prometheus, 10)
+        gid         = parseint(var.uid_prometheus, 10)
       }
 
       config {
@@ -835,7 +853,7 @@ job "monitoring-server" {
               conditions: ["[STATUS] == 200"]
             - name: ntfy
               group: monitoring
-              url: http://${var.ntfy_addr}/v1/health
+              url: http://127.0.0.1:${var.ntfy_port}/v1/health
               interval: 1m
               conditions: ["[STATUS] == 200"]
             - name: authelia-internal
@@ -844,17 +862,34 @@ job "monitoring-server" {
               client: {insecure: true}
               interval: 1m
               conditions: ["[STATUS] == 200"]
+          {{- /* the certificates of the agents are renewed by `task maintenance` / a deploy only: warn while there is time (the node's address, any name works with insecure) */}}
+          {{- range $n := nodes }}
+            - name: {{ printf "nomad certificate %s" $n.Node | toJSON }}
+              group: certificates
+              url: https://{{ $n.Address }}:${var.nomad_port}/v1/status/leader
+              client: {insecure: true}
+              interval: 6h
+              conditions: ["[CERTIFICATE_EXPIRATION] > 96h"]
+            - name: {{ printf "consul certificate %s" $n.Node | toJSON }}
+              group: certificates
+              url: https://{{ $n.Address }}:${var.consul_port}/v1/status/leader
+              client: {insecure: true}
+              interval: 6h
+              conditions: ["[CERTIFICATE_EXPIRATION] > 96h"]
+          {{- end }}
           {{- range $svc := services }}{{ range $tag := $svc.Tags }}
           {{- if $tag | regexMatch "^traefik\\.http\\.routers\\.[^.]+\\.rule=Host\\(`" }}
           {{- $host := $tag | regexReplaceAll "^[^`]*`([^`]+)`.*$" "$1" }}
-            - name: "{{ $host }}"
+          {{- /* tags are written by whoever submits a job: only a plain host name becomes an endpoint, and it is quoted as JSON */ -}}
+          {{- if $host | regexMatch "^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$" }}
+            - name: {{ $host | toJSON }}
               group: traefik
               url: https://${var.ingress_addr}/
-              headers: {Host: "{{ $host }}"}
+              headers: {Host: {{ $host | toJSON }}}
               client: {insecure: true, ignore-redirect: true}
               interval: 1m
               conditions: ["[STATUS] == any(200, 204, 301, 302, 303, 307, 308, 401, 403)"]
-          {{- end }}{{ end }}{{ end }}
+          {{- end }}{{ end }}{{ end }}{{ end }}
         EOT
         destination = "local/config.yaml"
       }

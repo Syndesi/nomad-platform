@@ -68,13 +68,14 @@ sources:
 [[- if and (eq .Node $node) (.Tags | contains "metrics") ]]
 [[- $path := "/metrics" ]][[ $scheme := "http" ]][[ $job := $svcname ]]
 [[- range .Tags ]]
-[[- if . | regexMatch "^metrics\\.path=" ]][[ $path = . | regexReplaceAll "^metrics\\.path=" "" ]][[ end ]]
-[[- if . | regexMatch "^metrics\\.scheme=" ]][[ $scheme = . | regexReplaceAll "^metrics\\.scheme=" "" ]][[ end ]]
-[[- if . | regexMatch "^metrics\\.job=" ]][[ $job = . | regexReplaceAll "^metrics\\.job=" "" ]][[ end ]]
+[[- /* tags are written by whoever submits a job and end up in this config: only strict values are taken, anything else keeps the default */ -]]
+[[- if . | regexMatch "^metrics\\.path=/[A-Za-z0-9_./-]*$" ]][[ $path = . | regexReplaceAll "^metrics\\.path=" "" ]][[ end ]]
+[[- if . | regexMatch "^metrics\\.scheme=(http|https)$" ]][[ $scheme = . | regexReplaceAll "^metrics\\.scheme=" "" ]][[ end ]]
+[[- if . | regexMatch "^metrics\\.job=[A-Za-z0-9_.-]+$" ]][[ $job = . | regexReplaceAll "^metrics\\.job=" "" ]][[ end ]]
 [[- end ]]
   svc_[[ $n ]]:
     type: prometheus_scrape
-    endpoints: ["[[ $scheme ]]://[[ .Address ]]:[[ .Port ]][[ $path ]]"]
+    endpoints: [ [[ printf "%s://%s:%d%s" $scheme .Address .Port $path | toJSON ]] ]
     scrape_interval_secs: 30
     tls: {verify_certificate: false}
 [[- $n = add $n 1 ]]
@@ -254,12 +255,12 @@ transforms:
 [[- range services ]][[ $svcname := .Name ]][[ range service .Name ]]
 [[- if and (eq .Node $node) (.Tags | contains "metrics") ]]
 [[- $job := $svcname ]]
-[[- range .Tags ]][[ if . | regexMatch "^metrics\\.job=" ]][[ $job = . | regexReplaceAll "^metrics\\.job=" "" ]][[ end ]][[ end ]]
+[[- range .Tags ]][[ if . | regexMatch "^metrics\\.job=[A-Za-z0-9_.-]+$" ]][[ $job = . | regexReplaceAll "^metrics\\.job=" "" ]][[ end ]][[ end ]]
   tag_svc_[[ $t ]]:
     type: remap
     inputs: [svc_[[ $t ]]]
     source: |
-      .tags.job = "[[ $job ]]"
+      .tags.job = [[ $job | toJSON ]]
 [[- $t = add $t 1 ]]
 [[- end ]]
 [[- end ]][[ end ]]

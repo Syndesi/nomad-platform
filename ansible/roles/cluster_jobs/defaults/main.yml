@@ -25,22 +25,33 @@ cluster_jobs_common_vars:
 
 # job file -> extra -var values. Order matters: authelia first (traefik's protected routes use its forward-auth service).
 cluster_jobs_list:
+  # the databases of both authelias first (they do not start without them)
+  - name: authelia-db
+    vars:
+      postgres_image: "{{ cluster_authelia_postgres_image }}"
+      redis_image: "{{ cluster_authelia_redis_image }}"
+      uid_postgres: "{{ cluster_authelia_postgres_uid | string }}"
+      uid_redis: "{{ cluster_authelia_redis_uid | string }}"
+      postgres_port: "{{ cluster_authelia_postgres_port }}"
+      redis_port: "{{ cluster_authelia_redis_port }}"
   - name: authelia
     vars:
+      postgres_port: "{{ cluster_authelia_postgres_port }}"
+      redis_port: "{{ cluster_authelia_redis_port }}"
       image: "{{ cluster_authelia_image }}"
       user: "{{ cluster_authelia_uid | string if cluster_authelia_uid | int != 0 else '' }}"
-      mesh: "{{ cluster_authelia_oidc_clients_public | length > 0 }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
   - name: authelia-internal
     file: authelia
     vars:
       image: "{{ cluster_authelia_image }}"
       user: "{{ cluster_authelia_uid | string if cluster_authelia_uid | int != 0 else '' }}"
+      postgres_port: "{{ cluster_authelia_postgres_port }}"
+      redis_port: "{{ cluster_authelia_redis_port }}"
       name: authelia-internal
       port: "{{ cluster_authelia_internal_port }}"
       data_volume: authelia-internal
       tls_volume: authelia-internal-tls
-      mesh: "{{ cluster_authelia_oidc_clients | length > 0 }}"
       tls_fingerprint: "{{ cluster_jobs_fingerprints.results | selectattr('item.job', 'eq', 'authelia-internal') | map(attribute='stdout') | sort | join(',') | hash('sha256') }}"
   # step-ca before traefik: traefik's ACME client (resolver stepca) asks it for the certificates of the internal names when it starts
   - name: step-ca
@@ -88,11 +99,11 @@ cluster_jobs_list:
       internal_apps: "{{ cluster_internal_apps | to_json }}"
       acme_server: "{{ cluster_acme_server }}"
       acme_email: "{{ cluster_acme_email }}"
+      ntfy_port: "{{ cluster_monitoring_ntfy_port if cluster_monitoring_enabled | bool else 0 }}"
   # the monitoring stack (cluster_monitoring_enabled): ntfy first (alerts go there), the server (Loki / Prometheus), then the agents that write to it
   - name: ntfy
     vars:
       image: "{{ cluster_monitoring_ntfy_image }}"
-      port: "{{ cluster_monitoring_ntfy_port }}"
       topic: "{{ cluster_monitoring_ntfy_topic }}"
   - name: monitoring-server
     vars:
@@ -110,7 +121,9 @@ cluster_jobs_list:
       gatus_port: "{{ cluster_monitoring_gatus_port }}"
       ingress_addr: "{{ hostvars[groups['cluster_ingress'][0]].cluster_ip }}"
       authelia_internal_addr: "{{ hostvars[cluster_authelia_hosts[0]].cluster_ip }}:{{ cluster_authelia_internal_port }}"
-      ntfy_addr: "{{ hostvars[cluster_monitoring_node].cluster_ip }}:{{ cluster_monitoring_ntfy_port }}"
+      ntfy_port: "{{ cluster_monitoring_ntfy_port }}"
+      nomad_port: "{{ cluster_nomad_http_port }}"
+      consul_port: "{{ cluster_consul_https_port }}"
       ntfy_topic: "{{ cluster_monitoring_ntfy_topic }}"
       extra_rules: "{{ ({'groups': cluster_monitoring_extra_rules} | to_json) if cluster_monitoring_extra_rules else '' }}"
   - name: monitoring-agent
@@ -139,6 +152,9 @@ cluster_jobs_authelia_instances:
     issuer: "{{ authelia_totp_issuer }}"
     rules: "{{ authelia_platform_public_rules + authelia_access_rules }}"
     session_secret: "{{ cluster_authelia_session_secret }}"
+    db_name: authelia
+    db_password: "{{ cluster_authelia_db_password }}"
+    redis_index: 0
     storage_key: "{{ cluster_authelia_storage_encryption_key }}"
     jwt_secret: "{{ cluster_authelia_reset_password_jwt_secret }}"
     totp_seeds: "{{ authelia_totp_seeds | default({}) }}"
@@ -153,6 +169,9 @@ cluster_jobs_authelia_instances:
     issuer: "{{ authelia_totp_issuer_internal }}"
     rules: "{{ authelia_internal_access_rules }}"
     session_secret: "{{ cluster_authelia_internal_session_secret }}"
+    db_name: authelia_internal
+    db_password: "{{ cluster_authelia_internal_db_password }}"
+    redis_index: 1
     storage_key: "{{ cluster_authelia_internal_storage_encryption_key }}"
     jwt_secret: "{{ cluster_authelia_internal_reset_password_jwt_secret }}"
     totp_seeds: "{{ authelia_internal_totp_seeds | default({}) }}"

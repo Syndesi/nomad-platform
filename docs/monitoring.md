@@ -21,7 +21,7 @@ come with finished dashboards: **no dashboards are deployed**, the data sources 
 |---|---|---|
 | Grafana | `https://grafana.<zone>` (`<zone>` = `cluster_internal_zone`, `<cluster_name>.internal`) | VPN, people's devices, authelia-internal (second factor) **and** Grafana's login with authelia-internal (OpenID Connect, "Login") |
 | Status page (Gatus) | `https://status.<zone>` | VPN, people's devices, authelia-internal |
-| ntfy | `https://ntfy.<cluster_domain>` | **public**; ntfy's own accounts (`deny-all` by default) |
+| ntfy | `https://ntfy.<cluster_domain>` | **public** through Traefik; ntfy's own accounts (`deny-all` by default). ntfy has no published port: Traefik's group and the monitoring allocation reach it through the Consul mesh (intentions: `traefik-mesh`, `monitoring-grafana-mesh`) |
 | Loki, Prometheus | inside the monitoring allocation | only the Vector agents, through the Consul mesh |
 | Alertmanager | inside the monitoring allocation (`127.0.0.1`) | Grafana (it is a data source, silences are made there), Prometheus, Loki |
 
@@ -152,8 +152,8 @@ and Grafana's HTTP client drops `:443`. So Grafana calls `https://auth.<zone>/..
 answers that one name with `127.0.0.1`, the container's own loopback, where the Connect sidecar of the service `monitoring-grafana-mesh` listens on 443 (an upstream
 to the mesh service `authelia-internal-mesh`, mutual TLS; the port exists only in that allocation's network namespace). authelia-internal is a mesh service for this
 (the job `authelia-internal` has a bridge network and a sidecar; the published port 9092, which Traefik and the checks use, is unchanged). The intention
-`authelia-internal-mesh` lets only `monitoring-grafana-mesh` connect. The certificate behind the sidecar is the node's, not one for `auth.<zone>`: Grafana does not verify it
-(`tls_skip_verify_insecure`): the way is loopback and then the mesh. Trusting a forward-auth header instead would not do: any container reaches Grafana's published port.
+`authelia-internal-mesh` lets only `monitoring-grafana-mesh` connect. Grafana verifies the certificate (`tls_client_ca` is the cluster root): authelia-internal's certificate is the node's own and carries the name `auth.<zone>`. The way is loopback and then the mesh with mutual TLS between the sidecars.
+Trusting a forward-auth header instead would not do: any container reaches Grafana's published port.
 
 ## Security notes
 
@@ -167,7 +167,7 @@ to the mesh service `authelia-internal-mesh`, mutual TLS; the port exists only i
   the container metrics; set the variable to `false` (or `cluster_monitoring_enabled: false`) if jobs of third parties run in the cluster that must not see the others' names.
 - Loki and Prometheus are unauthenticated inside their allocation and reachable only through the mesh (Consul intentions: `monitoring-vector` only). Grafana and Gatus publish a port on the cluster
   network, unauthenticated at that port for Gatus (it only shows status) and the OpenID login (authelia-internal) for Grafana; the *header* of a forward-auth is not trusted anywhere.
-- ntfy is public and has its own login; `auth-default-access: deny-all`, no sign-up. Alerts contain host and job names.
+- ntfy is public and has its own login; `auth-default-access: deny-all`, no sign-up. Alerts contain host and job names. It is reachable inside the cluster through the mesh only, and it ignores `X-Forwarded-For` (no `behind-proxy`): every request comes from its sidecar, so a client cannot pick the address ntfy sees (the price: ntfy's per-address limits see one visitor for all anonymous requests; logged-in users are counted per user).
 - Grafana's local admin password is `cluster_monitoring_grafana_admin_password` (the emergency login, see "Login").
 - The tokens of the agents (Nomad policy `monitoring`: read metrics, nodes, allocations, deployments; Consul policy `monitoring`: read catalog and health) are in the Nomad variable
   `nomad/jobs/monitoring-agent`, written by tofu-nomad; the deployer token cannot read it.

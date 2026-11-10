@@ -3,8 +3,10 @@
 # TOTP seeds and bans. The text below says "authelia" for either.
 # Config and users live in the Nomad variable nomad/jobs/<name> (written by tofu-nomad from
 # the cluster's authelia.yml + secrets), so no secret is part of this spec.
-# The sqlite database (totp secrets, devices, bans) is on the host volume "authelia" (/srv/authelia on the node, made by the nomad role),
-# so the job is bound to the nodes that have it (client meta authelia = true: the ingress node by default, cluster_authelia_hosts) and survives redeployments.
+# The storage (totp secrets, devices, bans) is in Postgres and the sessions in Redis (job authelia-db, one Postgres with a database per instance, outside gVisor),
+# reached through the mesh: the sidecar of this group has the upstreams 127.0.0.1:5432 / 6379. The host volume "authelia" (/srv/authelia, made by the nomad role)
+# only holds the notifier file now. The job is bound to the nodes that have the volumes (client meta authelia = true: the ingress node by default,
+# cluster_authelia_hosts). Start it after authelia-db (cluster_jobs_list).
 # The rendered config (session secret, storage key, password hashes) goes to secrets/ (mounted as /secrets, not readable through `nomad alloc fs`), mode 0600.
 # Port 9091 (https) is published on the node's cluster address; the firewall's forward chain drops it for everything outside the cluster.
 # Hardened like traefik: not root (variable user: the id owns the database folder and the key), all capabilities dropped, a read-only root
@@ -49,11 +51,14 @@ variable "tls_fingerprint" {
   type    = string
   default = ""
 }
-# true: the instance is also a mesh service "<name>-mesh" (Consul Connect sidecar), for the jobs that need to reach it under its name without a published port: the
-# group network is then a bridge (the published port stays the same). Used by authelia-internal as the OpenID Connect provider of Grafana (docs/monitoring.md).
-variable "mesh" {
-  type    = bool
-  default = false
+# The databases: local ports of the upstreams (the sidecar of the mesh service below) to authelia-postgres / authelia-redis of the job authelia-db
+variable "postgres_port" {
+  type    = number
+  default = 5432
+}
+variable "redis_port" {
+  type    = number
+  default = 6379
 }
 # "" = certs come from the cluster CA (traefik default cert), otherwise name of the ACME resolver
 variable "tls_resolver" {
@@ -74,10 +79,10 @@ job "authelia" {
 
   group "authelia" {
     network {
-      mode = var.mesh ? "bridge" : "host"
+      mode = "bridge"
       port "http" {
         static = var.port
-        to     = var.mesh ? var.port : 0
+        to     = var.port
       }
     }
 
@@ -118,29 +123,64 @@ job "authelia" {
       }
     }
 
-    # The mesh identity: the sidecar forwards (mutual TLS between the sidecars) to authelia's own https port in this network namespace. Intentions (tofu-consul):
-    # only the Grafana service may connect.
-    dynamic "service" {
-      for_each = var.mesh ? ["mesh"] : []
-      content {
-        name     = "${var.name}-mesh"
-        port     = var.port
-        provider = "consul"
-        tags     = []
-        connect {
-          sidecar_service {}
-          # runc: envoy is the network heavy part and a hardened, well audited image; the app stays in gVisor (cluster_gvisor_*)
-          sidecar_task {
-            # default of nomad is 250 MHz; the ingress node is booked out otherwise
-            resources {
-              cpu    = 100
-              memory = 128
+    # The mesh identity: the sidecar forwards (mutual TLS between the sidecars) to authelia's own https port in this network namespace, for the apps that log in
+    # with this instance (OpenID Connect; intentions in tofu-consul: only their services may connect, nobody if there are none), and it carries the upstreams to
+    # the databases of the job authelia-db (127.0.0.1:<postgres_port> / <redis_port>; intentions: only the mesh services of the two Authelia jobs).
+    service {
+      name     = "${var.name}-mesh"
+      port     = var.port
+      provider = "consul"
+      tags     = []
+      connect {
+        sidecar_service {
+          proxy {
+            upstreams {
+              destination_name = "authelia-postgres"
+              local_bind_port  = var.postgres_port
             }
-            config {
-              runtime = "runc"
+            upstreams {
+              destination_name = "authelia-redis"
+              local_bind_port  = var.redis_port
             }
           }
         }
+        # runc: envoy is the network heavy part and a hardened, well audited image; the app stays in gVisor (cluster_gvisor_*)
+        sidecar_task {
+          # default of nomad is 250 MHz; the ingress node is booked out otherwise
+          resources {
+            cpu    = 100
+            memory = 128
+          }
+          config {
+            runtime = "runc"
+          }
+        }
+      }
+    }
+
+    # Authelia exits at once when its databases do not answer, and the sidecar needs a while after its start (the listeners of the upstreams arrive from
+    # Consul a bit later): wait here until both ports in this namespace accept connections (at most two minutes, then start anyway and let Nomad's restart
+    # policy do the rest).
+    task "wait-for-databases" {
+      driver = "docker"
+      user   = var.user
+
+      lifecycle {
+        hook    = "prestart"
+        sidecar = false
+      }
+
+      config {
+        image           = var.image
+        entrypoint      = ["/bin/sh", "-c"]
+        args            = ["i=0; until nc -w 1 127.0.0.1 ${var.postgres_port} </dev/null && nc -w 1 127.0.0.1 ${var.redis_port} </dev/null; do i=$((i+1)); [ $i -gt 120 ] && exit 0; sleep 1; done"]
+        cap_drop        = ["ALL"]
+        readonly_rootfs = true
+      }
+
+      resources {
+        cpu    = 50
+        memory = 32
       }
     }
 

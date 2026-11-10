@@ -122,8 +122,23 @@ data "consul_acl_token_secret_id" "project" {
 # They live in the (client-side encrypted) state and nowhere else; ansible reads them with
 # `tofu output -json` when it renders the agent configs.
 
+# ---- consul connect: the mesh TLS (the Envoy sidecars) ---------------------------------------------------
+# Not automatic: TLS 1.3 at least and the hybrid post-quantum key exchange first, for the traffic between the sidecars (Vector -> Loki, Grafana -> Authelia, Traefik -> step-ca, ...).
+# The agents' own TLS is in the consul role (tls.defaults).
+resource "consul_config_entry" "mesh_tls" {
+  name = "mesh"
+  kind = "mesh"
+  config_json = jsonencode({
+    TLS = {
+      # min AND max: with only a minimum the sidecars could not connect to each other (tested with Consul 2.1.0 / Envoy 1.39.1)
+      Incoming = { TLSMinVersion = "TLSv1_3", TLSMaxVersion = "TLSv1_3", ECDHCurves = ["X25519MLKEM768", "X25519"] }
+      Outgoing = { TLSMinVersion = "TLSv1_3", TLSMaxVersion = "TLSv1_3", ECDHCurves = ["X25519MLKEM768", "X25519"] }
+    }
+  })
+}
+
 # ---- consul connect: intentions (default deny) -------------------------------------------------
-# step-ca is reachable through the mesh only. Only the service "traefik-acme" (traefik's group: its ACME client and the renewal of the service
+# step-ca is reachable through the mesh only. Only the service "traefik-mesh" (traefik's group: its ACME client and the renewal of the service
 # certificates) may connect; everything else is denied by the explicit "*" source, whatever the ACL default policy is.
 resource "consul_config_entry" "stepca_intentions" {
   count = var.stepca_enabled ? 1 : 0
@@ -131,7 +146,7 @@ resource "consul_config_entry" "stepca_intentions" {
   kind  = "service-intentions"
   config_json = jsonencode({
     Sources = [
-      { Name = "traefik-acme", Action = "allow", Precedence = 9 },
+      { Name = "traefik-mesh", Action = "allow", Precedence = 9 },
       { Name = "*", Action = "deny", Precedence = 1 },
     ]
   })
@@ -174,6 +189,46 @@ resource "consul_config_entry" "authelia_internal_mesh_intentions" {
       [for s in var.oidc_mesh_services : { Name = s, Action = "allow", Precedence = 9 }],
       [{ Name = "*", Action = "deny", Precedence = 1 }],
     )
+  })
+}
+
+# The databases of the two authelias (job authelia-db): Postgres and Redis through the mesh only, the mesh services of the two authelia jobs may connect.
+resource "consul_config_entry" "authelia_postgres_intentions" {
+  name = "authelia-postgres"
+  kind = "service-intentions"
+  config_json = jsonencode({
+    Sources = [
+      { Name = "authelia-mesh", Action = "allow", Precedence = 9 },
+      { Name = "authelia-internal-mesh", Action = "allow", Precedence = 9 },
+      { Name = "*", Action = "deny", Precedence = 1 },
+    ]
+  })
+}
+
+resource "consul_config_entry" "authelia_redis_intentions" {
+  name = "authelia-redis"
+  kind = "service-intentions"
+  config_json = jsonencode({
+    Sources = [
+      { Name = "authelia-mesh", Action = "allow", Precedence = 9 },
+      { Name = "authelia-internal-mesh", Action = "allow", Precedence = 9 },
+      { Name = "*", Action = "deny", Precedence = 1 },
+    ]
+  })
+}
+
+# ntfy is reachable through the mesh only: Traefik's group (the public name ntfy.<domain>) and the monitoring server's group (Alertmanager's webhook, the status
+# page; their mesh identity is "monitoring-grafana-mesh"). Everything else is denied.
+resource "consul_config_entry" "ntfy_intentions" {
+  count = var.monitoring_enabled ? 1 : 0
+  name  = "ntfy"
+  kind  = "service-intentions"
+  config_json = jsonencode({
+    Sources = [
+      { Name = "traefik-mesh", Action = "allow", Precedence = 9 },
+      { Name = "monitoring-grafana-mesh", Action = "allow", Precedence = 9 },
+      { Name = "*", Action = "deny", Precedence = 1 },
+    ]
   })
 }
 

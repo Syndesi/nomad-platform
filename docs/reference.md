@@ -72,8 +72,7 @@ domain in `authelia_access_rules` (first match wins: put it after the rules of t
 (or `deny`); the deploy refuses anything else and users without a TOTP seed. `task authelia:user
 -- <name>` asks for a password (twice, or from stdin) and stores its argon2id hash and a generated TOTP seed sops-encrypted. The deploy
 registers the seeds in Authelia and writes the otpauth URI to `secrets/authelia/totp-<name>.txt` (git-ignored): put it into an
-authenticator app. The seed is the truth, so a lost database is repaired by the next deploy. The sqlite database lives in the host volume
-`authelia` (`/srv/authelia` on the nodes in `cluster_authelia_hosts`, the ingress node by default) and is part of `task backup`. The job has
+authenticator app. The seed is the truth, so a lost database is repaired by the next deploy. The storage (second factors, devices, bans) is in **Postgres** and the sessions in **Redis**: the job `authelia-db` (one Postgres with a database and a user per instance, one Redis with a database index per instance) runs on runc, outside gVisor, on the node of Authelia (`cluster_authelia_hosts`, the ingress node by default; data in `/srv/authelia-db`). Both Authelias reach them through the Consul mesh only (upstreams `127.0.0.1:5432` / `6379` of their sidecars; intentions: just the two Authelia jobs), and each needs its password (`cluster_authelia_*_db_password`, `cluster_authelia_redis_password`). Why not sqlite: its locking and `-shm` coordination do not work between sandboxes (gVisor tracks file locks in its own kernel), so a backup in a second container could not be trusted; `pg_dump` against a real Postgres can. A restart of Redis logs everybody out. The database is part of `task backup`. The job has
 `auto_revert = false` on purpose (a failed upgrade may already have migrated the database). Sessions: 18 hours without a request, 24 hours
 at most after the login (`authelia_session_*`).
 
@@ -131,7 +130,7 @@ By default `sudo` (Ubuntu) / `doas` (Alpine) are passwordless for the `ansible` 
 The ops UIs (`auth.`, `nomad.`, `consul.`, `traefik.<cluster_name>.internal`) and any internal app are **not** on the public entry point. Their
 routers live in Traefik's file provider on the entry point `vpn`, which only exists on the WireGuard address inside Traefik's allocation
 (`cluster_vpn_subnet`, default `10.99.0.0/24`, the server is `.1`). In front of them is a **second Authelia** (`authelia-internal`): own cookie
-domain, secrets, sqlite database, TOTP seeds (`authelia_internal_totp_seeds`, always separate from the public ones, `task authelia:seed` makes both), bans.
+domain, secrets, database (in the shared Postgres), TOTP seeds (`authelia_internal_totp_seeds`, always separate from the public ones, `task authelia:seed` makes both), bans.
 
 ```
 device --tcp/443 (SNI vpn.<cluster_domain>, mTLS)--> traefik TCP router (TLS passthrough) --> wstunnel --udp 127.0.0.1:51820--> wireguard (wg1)
@@ -168,7 +167,7 @@ step-ca intermediate (key encrypted; password and the two JWK provisioner keys i
 Nomad and Consul agent certificates **never** come from step-ca (an expired one would break the thing that renews it); Consul Connect keeps its own CA.
 
 * **Reachable through the Consul mesh only:** it binds 127.0.0.1:9000 in its own namespace, no host port. Intentions are default deny
-  (tofu-consul): only the service `traefik-acme` (Traefik's group, upstream `step-ca` -> 127.0.0.1:9000) may connect. Operators use
+  (tofu-consul): only the service `traefik-mesh` (Traefik's group, upstream `step-ca` -> 127.0.0.1:9000) may connect. Operators use
   `nomad alloc exec`. It must not be published, reached from the VPN, or from a workload without an intention (`task smoke` and the tests check).
 * **Traefik** has two resolvers: the public one (`cluster_acme_ca`) and `stepca` for the internal routers: tls-alpn-01, per-name certificates,
   7 days (`cluster_stepca_cert_hours`, `certificatesDuration`), the ACME provisioner may only issue `*.<zone>`. step-ca validates against the ingress
@@ -202,6 +201,7 @@ Do not add them back (the comment in `ansible/roles/nomad/tasks/main.yml` says t
   wireguard sidecar of Traefik) exit at once ("can only run as pid 1"), and a job cannot opt out; a job that wants tini sets `init = true` in its docker config.
 * **What confines a container:** the default seccomp profile on both OS families, AppArmor (`docker-default`) additionally on Ubuntu (Alpine's kernel has no AppArmor
   or SELinux), `no-new-privileges`, a private cgroup namespace on cgroup v2. Nothing here switches them off; a job can (`security_opt`), see `docs/projects.md`.
+  **Not for containers in gVisor** (the default, see below): `runsc` does not enforce Docker's seccomp profile inside the sandbox (that needs `--oci-seccomp`), and AppArmor does not apply to the processes in it. There the sentry is the confinement: it answers the container's syscalls itself and is seccomp filtered on the host side. `security_opt` of a job has no effect on a sandboxed task. Only the tasks on `runc` have the Docker profile.
 * **Nomad's docker plugin:** `allow_caps` is always set (`nomad_docker_default_caps` + `nomad_docker_extra_caps`): it limits what `cap_add` may name, not the capabilities
   Docker gives every container. Privileged mode is off (nomad's default), `pid_mode = "host"` is refused with it. `allow_runtimes` lists `runc`, the gVisor runtimes (see below) and the runtimes of
   `cluster_docker_daemon_extra` (the `nvidia` runtime works as soon as a job asks for it).
@@ -224,7 +224,7 @@ for `runtime = "runsc-host"`), `cluster_gvisor_enabled: false` removes gVisor fr
 
 | runtime | what | use it for |
 |---|---|---|
-| `runsc-host` (**default**) | sandbox on the network of its network namespace (`--network=host`: the sockets are the node kernel's, inside Nomad's bridge, the netns of the group). Containers of a group share one loopback, the firewall, the DNS rules and the egress network see the same packets as with runc. `--host-uds=open` lets the sidecar reach Consul's gRPC socket in the allocation directory | everything in `network { mode = "bridge" }` or `"cni/egress"`, i.e. also every group with a Connect sidecar (Authelia, Traefik, step-ca, Outline, ...) |
+| `runsc-host` (**default**) | sandbox on the network of its network namespace (`--network=host`: the sockets are the node kernel's, inside Nomad's bridge, the netns of the group). Containers of a group share one loopback, the firewall, the DNS rules and the egress network see the same packets as with runc. `--host-uds=open` lets the sidecar reach Consul's gRPC socket in the allocation directory. The flag is a property of the runtime, so it applies to every default container, although only a Connect sidecar needs it. The platform's own sidecars are on runc (`runtime = "runc"` in `sidecar_task`) and do not need it; it exists for sidecars of project jobs and `tests/connect.nomad.hcl` that stay on the default. A second runtime just for sidecars would buy nothing right now: using it cannot be enforced (a job names its own runtime), and a sidecar that opts in is in the same position as one that picks runc. The risk is low anyway, because host bind mounts are off | everything in `network { mode = "bridge" }` or `"cni/egress"`, i.e. also every group with a Connect sidecar (Authelia, Traefik, step-ca, Outline, ...) |
 | `runsc` | sandbox with its own network stack (the node's kernel sees only ethernet frames on the veth). **One container per network namespace**: the first sandbox takes the interface, a second one in the same namespace gets none | a single task on docker's bridge (`network_mode = "bridge"` in the docker config, no `network` block): the strongest isolation. No Connect |
 | `runc` | docker's default | databases from official images without network access, `vpn` (wireguard needs netlink and the real kernel), dnsmasq (rtnetlink groups), things that read the docker socket or the host's logs (vector), grafana (see below), anything that does not run in gVisor |
 
@@ -325,8 +325,8 @@ a clean error. It does not replace the network rules of the host firewall or the
 
 ## Backup and restore
 
-`task backup` writes `backups/<cluster>-<time>/`: Nomad and Consul snapshots, the tofu states, the authelia database of each node that has
-one (an SQL dump made by `sqlite3` in a throwaway container on the node, image `cluster_sqlite_image`, replayed by `task restore`), the database of Grafana (`pg_dump` in the running postgres of the monitoring stack, replayed by `task restore`; the logs and metrics are not backed up) and traefik's `acme.json` (public ACME CAs), all age-encrypted to the recipients of `.sops.yaml` (newest `BACKUP_KEEP`, default 10).
+`task backup` writes `backups/<cluster>-<time>/`: Nomad and Consul snapshots, the tofu states, the databases of both authelias
+(`pg_dump` in the running Postgres of the job `authelia-db`, replayed by `task restore` once the job runs), the database of Grafana (`pg_dump` in the running postgres of the monitoring stack, replayed by `task restore`; the logs and metrics are not backed up) and traefik's `acme.json` (public ACME CAs), all age-encrypted to the recipients of `.sops.yaml` (newest `BACKUP_KEEP`, default 10).
 Application data is not part of it. Copy the folder off the machine, together with the age private key (`secrets/age/keys.txt`): without
 the key the backups and every secret are lost.
 

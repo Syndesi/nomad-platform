@@ -93,6 +93,7 @@ resource "nomad_acl_policy" "deployer" {
         # tokens. The deployer neither reads nor changes them (the more specific path wins over the glob above).
         path "nomad/jobs/authelia" { capabilities = ["deny"] }
         path "nomad/jobs/authelia-internal" { capabilities = ["deny"] }
+        path "nomad/jobs/authelia-db" { capabilities = ["deny"] }
         path "nomad/jobs/traefik" { capabilities = ["deny"] }
         path "nomad/jobs/step-ca" { capabilities = ["deny"] }
         path "nomad/jobs/monitoring-server" { capabilities = ["deny"] }
@@ -217,6 +218,12 @@ resource "nomad_variable" "authelia" {
     configuration = var.authelia_configuration
     users         = var.authelia_users
   }
+}
+
+# the passwords of the databases of both authelias (job authelia-db: Postgres superuser and the two users, Redis)
+resource "nomad_variable" "authelia_db" {
+  path  = "nomad/jobs/authelia-db"
+  items = var.authelia_db_items
 }
 
 resource "nomad_variable" "authelia_internal" {

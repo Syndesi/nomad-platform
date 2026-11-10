@@ -127,8 +127,14 @@ identity_validation:
   reset_password:
     jwt_secret: {{ authelia_inst.jwt_secret | to_json }}
 session:
-  # sessions are in memory (no redis): they end with the authelia process, a redeploy logs everybody out. The second factors do not (storage below).
+  # sessions are in Redis (job authelia-db, through the mesh upstream on 127.0.0.1; one database index per instance), kept in memory only: a restart of Redis
+  # logs everybody out, a redeploy of authelia does not. The second factors are in Postgres (storage below).
   secret: {{ authelia_inst.session_secret | to_json }}
+  redis:
+    host: 127.0.0.1
+    port: {{ cluster_authelia_redis_port }}
+    password: {{ cluster_authelia_redis_password | to_json }}
+    database_index: {{ authelia_inst.redis_index }}
   inactivity: {{ authelia_session_inactivity }}
   expiration: {{ authelia_session_expiration }}
   remember_me: {{ authelia_session_remember_me }}
@@ -138,9 +144,12 @@ session:
       same_site: lax
 storage:
   encryption_key: {{ authelia_inst.storage_key | to_json }}
-  local:
-    # the host volume of the instance (data_volume, see jobs/authelia.nomad.hcl): totp secrets, devices, bans
-    path: /data/db.sqlite3
+  postgres:
+    # job authelia-db through the mesh upstream (the sidecar of this group listens on 127.0.0.1): totp secrets, devices, bans. One database and user per instance.
+    address: 'tcp://127.0.0.1:{{ cluster_authelia_postgres_port }}'
+    database: {{ authelia_inst.db_name | to_json }}
+    username: {{ authelia_inst.db_name | to_json }}
+    password: {{ authelia_inst.db_password | to_json }}
 notifier:
   filesystem:
     filename: /data/notification.txt

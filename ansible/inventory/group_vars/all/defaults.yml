@@ -175,10 +175,6 @@ cluster_gvisor_docker_daemon: >-
                    'runsc-host': {'path': cluster_gvisor_version_dir ~ '/runsc', 'runtimeArgs': ['--platform=' ~ cluster_gvisor_platform, '--network=host', '--host-uds=open']}}}
      | combine({'default-runtime': cluster_gvisor_default_runtime} if cluster_gvisor_default_runtime != 'runc' else {}) }}
 cluster_docker_runtimes_allowed: "{{ (['runc', 'runsc', 'runsc-host'] if cluster_gvisor_enabled | bool else ['runc']) + (cluster_docker_daemon_extra.runtimes | default({}) | list) }}"
-# Image with a `sqlite3` binary (any image that has one in its PATH; use a version tag, no digests and no `latest`). `task backup` and `task restore` run it as a throwaway
-# container on the authelia node (no network, only the authelia folder mounted) to dump / replay Authelia's database: nothing is installed on the nodes.
-# The nodes pull it through docker when it is first used.
-cluster_sqlite_image: keinos/sqlite3:3.54.1
 # Container logs (docker json-file): docker rotates by size only, not by day. Per container: max-file files of max-size.
 # open files per container (nofile, soft and hard): high on purpose, for databases and dev setups. A job can still set its own (task config `ulimit`).
 cluster_docker_nofile: 1048576
@@ -205,12 +201,21 @@ cluster_egress_bridge_subnet: 172.26.80.0/20
 cluster_egress_bridge_ip: 172.26.80.1
 
 # --- authelia ---------------------------------------------------------------------------------------
-# Authelia keeps its sqlite database (second factors, devices, bans) in a plain folder on the node it runs on, offered to nomad as the host
-# volume "authelia" (fragment 55-authelia.hcl) and used by the job through a constraint on the client meta authelia = true. It runs on the
-# node in cluster_authelia_hosts: the ingress node by default, so Authelia runs next to traefik (its forward-auth is one hop on the
-# same host) and keeps one database. It must be a client. The folder is part of `task backup`.
+# Authelia keeps its storage (second factors, devices, bans) in Postgres and its sessions in Redis (job authelia-db: one Postgres with a database per
+# instance, one Redis; both on runc, reached through the mesh). The data is a plain folder on the node, offered to nomad as the host volume "authelia-db"
+# (fragment 55-authelia.hcl); the notifier file of each instance is in its own folder (host volume "authelia"). The jobs run on the node in cluster_authelia_hosts
+# (client meta authelia = true): the ingress node by default, so Authelia runs next to traefik (its forward-auth is one hop on the same host). It must be
+# a client. The databases are part of `task backup` (pg_dump).
 cluster_authelia_hosts: "{{ groups['cluster_ingress'] | default([]) }}"
 cluster_authelia_dir: /srv/authelia
+cluster_authelia_db_dir: /srv/authelia-db
+# images (version tags, no digests and no `latest`) and the user ids they run as; the ports are the local ports of the mesh upstreams in the Authelia jobs
+cluster_authelia_postgres_image: "{{ cluster_monitoring_postgres_image }}"
+cluster_authelia_postgres_uid: 70
+cluster_authelia_redis_image: redis:8.10.3-alpine
+cluster_authelia_redis_uid: 999
+cluster_authelia_postgres_port: 5432
+cluster_authelia_redis_port: 6379
 # The user id authelia runs as in its container (0 = root). Not root by default: all capabilities are dropped, the root filesystem is read-only,
 # and the folder above and the key of its certificate belong to this id.
 cluster_authelia_uid: 8000
@@ -219,7 +224,7 @@ cluster_authelia_uid: 8000
 # One directory each, so a job sees only its own key.
 cluster_authelia_tls_dir: /etc/cluster/tls-authelia
 cluster_ingress_tls_dir: /etc/cluster/tls-ingress
-# authelia sessions (in memory): a session ends after `inactivity` without a request or `expiration` after the login; "remember me" lengthens it
+# authelia sessions (in Redis): a session ends after `inactivity` without a request or `expiration` after the login; "remember me" lengthens it
 authelia_session_inactivity: 18h # without a request for this long the session ends
 authelia_session_expiration: 24h # this long after the login the session ends whatever happened in between (one login per day)
 authelia_session_remember_me: -1 # -1 disables "remember me" (it would outlive the 24h cap); a duration such as 168h enables it
@@ -372,9 +377,10 @@ cluster_monitoring_node: "{{ (groups['cluster_servers'] | intersect(groups['clus
 cluster_monitoring_retention_days: 45
 # the data of the server (one folder per component) on cluster_monitoring_node, and Vector's checkpoints on every client
 cluster_monitoring_dir: /srv/monitoring
-# published ports (cluster network only) on cluster_monitoring_node: Grafana and Gatus behind traefik, ntfy for traefik and Alertmanager
+# published ports (cluster network only) on cluster_monitoring_node: Grafana and Gatus behind traefik
 cluster_monitoring_grafana_port: 3300
 cluster_monitoring_gatus_port: 8480
+# ntfy is mesh only (no published port): the local port of its upstream in the namespaces of traefik and of the monitoring server
 cluster_monitoring_ntfy_port: 8580
 cluster_monitoring_ntfy_topic: alerts
 cluster_monitoring_postgres_image: postgres:17.11-alpine3.23

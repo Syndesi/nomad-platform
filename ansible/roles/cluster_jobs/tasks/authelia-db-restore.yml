@@ -1,0 +1,42 @@
+---
+# Input: cluster_jobs_authelia_inst (authelia | authelia-internal), cluster_jobs_authelia_pg (the postgres container on the authelia node).
+# The database and its owner are named like the instance with _ for -. Decrypted on the controller (tmpfs), copied to the node, replayed, removed.
+- name: Replay the dump of one authelia
+  block:
+    - name: Decrypt on the controller (tmpfs)
+      ansible.builtin.shell: >-
+        set -o pipefail; umask 077;
+        age -d -i {{ cluster_restore_age_key | quote }} {{ (cluster_restore_dir ~ '/authelia-db-' ~ cluster_jobs_authelia_inst ~ '.sql.age') | quote }}
+        > {{ (cluster_run_dir ~ '/restore-authelia-db-' ~ cluster_jobs_authelia_inst ~ '.sql') | quote }}
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Copy to the authelia node
+      ansible.builtin.copy:
+        src: "{{ cluster_run_dir }}/restore-authelia-db-{{ cluster_jobs_authelia_inst }}.sql"
+        dest: "/root/restore-authelia-db-{{ cluster_jobs_authelia_inst }}.sql"
+        mode: "0600"
+      delegate_to: "{{ cluster_authelia_hosts[0] }}"
+      become: true
+
+    - name: Replay the dump
+      ansible.builtin.shell: >-
+        docker exec -i {{ cluster_jobs_authelia_pg.stdout }} psql -v ON_ERROR_STOP=0 -q
+        -U {{ cluster_jobs_authelia_inst | replace('-', '_') }} {{ cluster_jobs_authelia_inst | replace('-', '_') }}
+        < /root/restore-authelia-db-{{ cluster_jobs_authelia_inst }}.sql >/dev/null
+      changed_when: true
+      delegate_to: "{{ cluster_authelia_hosts[0] }}"
+      become: true
+  always:
+    - name: The decrypted dump is removed (controller and node)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      delegate_to: "{{ item.host }}"
+      become: "{{ item.host != 'localhost' }}"
+      loop:
+        - { host: localhost, path: "{{ cluster_run_dir }}/restore-authelia-db-{{ cluster_jobs_authelia_inst }}.sql" }
+        - { host: "{{ cluster_authelia_hosts[0] }}", path: "/root/restore-authelia-db-{{ cluster_jobs_authelia_inst }}.sql" }
