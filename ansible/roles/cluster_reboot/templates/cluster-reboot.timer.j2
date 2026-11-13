@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Nightly check for a pending kernel reboot
+
+[Timer]
+# UTC, so the window is the same on every node; the minute differs per node (cluster_reboot_window_*)
+OnCalendar=*-*-* {{ '%02d' | format(cluster_reboot_node_minute | int // 60) }}:{{ '%02d' | format(cluster_reboot_node_minute | int % 60) }}:00 UTC
+Persistent=false
+
+[Install]
+WantedBy=timers.target

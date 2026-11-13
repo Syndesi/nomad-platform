@@ -4,6 +4,16 @@ Notable changes per version. Older history is in git.
 
 ## 0.3.0 (unreleased)
 
+- **Debian 13 replaces Ubuntu (breaking):** the nodes run **Debian 13 (trixie)** or the latest Alpine; Ubuntu is no longer supported (Debian 13 has the NVIDIA drivers and ships OpenSSH 10.0 and OpenSSL 3.5, so
+  `mlkem768x25519-sha256` and X25519MLKEM768 work, checked on the `debian:trixie` image). **Migrate:** the inventory group `ubuntu` is `debian`
+  (group_vars file renamed), `.env`: `UBUNTU_BUILD_VERSION=26.04` becomes `DEBIAN_BUILD_VERSION=13` (the build image is `debian:13`), then `task build` (the artifacts are named `...-debian-...`).
+  There is no in-place upgrade from Ubuntu: reinstall the node (`task node`). Debian specifics: `unattended-upgrades` takes `debian-security` only; trixie splits `systemd-resolved` and
+  `systemd-timesyncd` out and ships no rsyslog, so the platform installs all three; `sudo` is the classic one (the `sudo-rs` workaround is gone). The platform scripts only know `debian` now (`node-bootstrap.sh`).
+- **Automatic reboots for kernel updates (role `cluster_reboot`):** a node reboots by itself, at night, when a newer kernel than the running one is installed (no drain, a plain reboot).
+  `cluster_reboot_enabled` (default true), `cluster_reboot_window_start` (UTC, 02:00) and `cluster_reboot_window_minutes` (120; each node picks its minute by its name). New per-node switch
+  `cluster_reboot_requires_unlock` (default false) for nodes whose disk needs a person at boot: they are never rebooted by themselves or by `task maintenance`, only listed. `task maintenance` now
+  uses the same check (`/usr/local/sbin/cluster-reboot --check`) on both OS families. `task smoke` checks the script and the nightly job on every node. Set `cluster_reboot_enabled: false` to keep the
+  old behaviour (nothing reboots by itself). Full disk encryption stays outside the platform: `docs/disk-encryption.md` (the contract and the options, nothing tested).
 - **wstunnel and certificate renewal (open):** wstunnel reads its certificate once and gVisor delivers no file change notifications across sandboxes, so a renewed certificate is only used after a restart of the job.
   A restart on renewal (a Nomad template watching a file bumped by `step ca renew --exec`) does not work: the template file sandbox only allows the task directory, not the allocation's shared directory (tested). It would need `template.disable_file_sandbox` on the clients, which is too broad.
 - **Post-quantum TLS in Consul:** `tls_ecdh_curves = "X25519MLKEM768,X25519"` for the agents (`tls.defaults`) and TLS 1.3 as the minimum on `internal_rpc` and `https` (not on `grpc`: the Envoy sidecars cannot reach it then) and a `mesh` config entry with the same for the Envoy sidecars (tofu-consul).

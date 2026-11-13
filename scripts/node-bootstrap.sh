@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prepare a node for the platform, ONCE, as root, by hand (or by cloud-init): after this ansible can log in over ssh
-# as an unprivileged user and become root through sudo (ubuntu/debian) or doas (alpine). Everything else - hardening
+# as an unprivileged user and become root through sudo (debian) or doas (alpine). Everything else - hardening
 # sshd, packages, the cluster - is done by ansible afterwards.
 #
 #   sh node-bootstrap.sh <user> '<public ssh key>' ['<public ssh key>' ...]
@@ -31,7 +31,7 @@ case "$ID" in
     rc-update add sshd default >/dev/null 2>&1 || true
     rc-service sshd start >/dev/null 2>&1 || true
     ;;
-  debian | ubuntu)
+  debian)
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq openssh-server sudo python3 >/dev/null
@@ -43,7 +43,7 @@ case "$ID" in
     systemctl enable --now ssh >/dev/null 2>&1 || systemctl enable --now sshd >/dev/null 2>&1 || true
     ;;
   *)
-    echo "unsupported OS '$ID' (alpine, debian, ubuntu)" >&2
+    echo "unsupported OS '$ID' (alpine, debian)" >&2
     exit 1
     ;;
 esac

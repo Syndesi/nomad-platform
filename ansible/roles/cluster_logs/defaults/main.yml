@@ -2,7 +2,7 @@
 # Log retention of the agents, one file per day:
 #   alpine  OpenRC writes the agent logs to plain files; logrotate (daily, from busybox crond) rotates them by date and
 #           deletes what is older than cluster_log_retention_days. copytruncate: the agents keep their file handle.
-#   ubuntu  everything goes to the journal; journald starts a new file every day and drops entries older than the retention.
+#   debian  everything goes to the journal; journald starts a new file every day and drops entries older than the retention.
 cluster_logs_files:
   - /var/log/nomad.log
   - /var/log/consul.log

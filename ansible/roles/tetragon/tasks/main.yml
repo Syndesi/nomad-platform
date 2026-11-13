@@ -1,5 +1,5 @@
 ---
-# Tetragon (eBPF runtime security): a host service on every node, the agent of the official static release (the same files run on Alpine and Ubuntu).
+# Tetragon (eBPF runtime security): a host service on every node, the agent of the official static release (the same files run on Alpine and Debian).
 # Events (process exec/exit with container and image, plus whatever the tracing policies watch) go to a json file; metrics on the node's cluster
 # address. Policies: the presets of cluster_tetragon_presets and the cluster repo's tetragon.d/*.yaml. See docs/reference.md.
 - name: Prerequisites - BTF and cgroup v2

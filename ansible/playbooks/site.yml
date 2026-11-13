@@ -223,7 +223,8 @@
   vars:
     # nc is what the tofu tunnel uses on a server (busybox on alpine); chrony: alpine ships no time sync at all
     base_packages:
-      Debian: [ca-certificates, curl, htop, openssl, jq, netcat-openbsd, nftables]
+      # trixie splits these out of systemd (resolved: the consul zone, timesyncd: the clock check) and ships no rsyslog (the monitoring agent reads /var/log/syslog)
+      Debian: [ca-certificates, curl, htop, openssl, jq, netcat-openbsd, nftables, systemd-resolved, systemd-timesyncd, rsyslog]
       Alpine: [ca-certificates, curl, htop, openssl, jq, chrony, logrotate, nftables]
     # nodes that run workloads: docker (nomad docker driver), the dns forwarder, cni plugins + iptables for bridge networking
     client_packages:
@@ -303,6 +304,10 @@
       ansible.builtin.include_role:
         name: cluster_updates
 
+    - name: Reboot at night when a kernel update wants it (cluster_reboot_*)
+      ansible.builtin.include_role:
+        name: cluster_reboot
+
     - name: Log retention (one file per day, cluster_log_retention_days)
       ansible.builtin.include_role:
         name: cluster_logs
@@ -346,7 +351,7 @@
       changed_when: false
       when: ansible_facts["os_family"] == "Alpine"
 
-    - name: Clock is synchronized (ubuntu)
+    - name: Clock is synchronized (debian)
       ansible.builtin.command: timedatectl show -p NTPSynchronized --value
       register: cluster_clock
       until: cluster_clock.stdout | trim == 'yes'

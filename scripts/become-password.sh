@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host side, via `task become:password [-- remove]`: sudo (ubuntu) and doas (alpine) ask the ansible user for a password.
+# Host side, via `task become:password [-- remove]`: sudo (debian) and doas (alpine) ask the ansible user for a password.
 # The password is stored sops-encrypted as ansible_become_password in inventory/group_vars/all/become.sops.yml, so every
 # ansible run and every script that needs root (through ansible) supplies it by itself. `task deploy:ansible` applies it to the
 # nodes (the first run still works passwordless: the bootstrap script made the node passwordless). `remove` only deletes the

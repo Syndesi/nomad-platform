@@ -1,11 +1,11 @@
 ---
 # *.consul resolves on the node itself AND inside docker containers (nomad tasks).
-#   ubuntu: systemd-resolved forwards ~consul to the local consul dns port and also listens on docker0
+#   debian: systemd-resolved forwards ~consul to the local consul dns port and also listens on docker0
 #   alpine: dnsmasq forwards consul to the local dns port, everything else upstream, listens on docker0
 # docker gets `dns: [docker0 ip]` on both. Pattern taken from the previous deployments.
 # Containers have no internet by default (see the firewall), and neither does their dns: the address docker hands out (docker0) is answered by a
 # RESTRICTED resolver (a dnsmasq: *.consul and this node's names only). The containers of the network "egress" are sent to the full resolver at
-# the egress bridge's address by a firewall rule (nat). That one is the node's dnsmasq on alpine and a second dnsmasq in front of systemd-resolved on ubuntu.
+# the egress bridge's address by a firewall rule (nat). That one is the node's dnsmasq on alpine and a second dnsmasq in front of systemd-resolved on debian.
 - name: Docker config directory
   ansible.builtin.file:
     path: /etc/docker
@@ -43,7 +43,7 @@
     mode: "0644"
   register: cluster_dns_restricted
 
-- name: Ubuntu - systemd-resolved
+- name: Debian - systemd-resolved
 
   when: ansible_facts['os_family'] == 'Debian'
   block:

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Usage: binaries/build-runsc.sh <alpine|ubuntu>
+# Usage: binaries/build-runsc.sh <alpine|debian>
 # Writes $ARTIFACTS_DIR/runsc-<version>-<variant>-<arch>.tar (runsc + its gvisor-bin/ sidecars) next to the nomad and consul binaries (same cache, same rules as build.sh:
 # skips an existing file, FORCE=1 rebuilds, ARCH=amd64|arm64 for a foreign arch). Versions come from the cluster's .env:
 # GVISOR_VERSION (e.g. 20261102.0) and GVISOR_GO_COMMIT (the commit of gvisor's `go` branch that merges that release, see Dockerfile.gvisor).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-variant=${1:?variant: alpine|ubuntu}
-case "$variant" in alpine|ubuntu) ;; *) echo "unknown variant: $variant" >&2; exit 2 ;; esac
+variant=${1:?variant: alpine|debian}
+case "$variant" in alpine|debian) ;; *) echo "unknown variant: $variant" >&2; exit 2 ;; esac
 version=${GVISOR_VERSION:?set GVISOR_VERSION in .env}
 commit=${GVISOR_GO_COMMIT:?set GVISOR_GO_COMMIT in .env}
 
@@ -39,7 +39,7 @@ DOCKER_BUILDKIT=1 docker build \
   --build-arg "GO_COMMIT=${commit}" \
   --build-arg "VARIANT=${variant}" \
   --build-arg "ALPINE_VERSION=${ALPINE_VERSION:?set ALPINE_VERSION in .env}" \
-  --build-arg "UBUNTU_VERSION=${UBUNTU_BUILD_VERSION:?set UBUNTU_BUILD_VERSION in .env}" \
+  --build-arg "DEBIAN_VERSION=${DEBIAN_BUILD_VERSION:?set DEBIAN_BUILD_VERSION in .env}" \
   --build-arg "GO_VERSION=${GO_VERSION:?set GO_VERSION in .env}" \
   --output "type=local,dest=${tmp}" \
   binaries

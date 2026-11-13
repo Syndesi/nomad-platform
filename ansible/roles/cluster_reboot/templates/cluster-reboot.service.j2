@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Reboot when a newer kernel is installed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cluster-reboot

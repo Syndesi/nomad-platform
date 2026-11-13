@@ -1,0 +1,86 @@
+---
+# Reboot when a kernel update wants it, at night. See defaults and docs/reference.md ("Updates and reboots").
+# The script is always installed (task maintenance asks it `--check`); the nightly job only when it may reboot by itself.
+- name: Reboot script
+  ansible.builtin.copy:
+    src: cluster-reboot.sh
+    dest: /usr/local/sbin/cluster-reboot
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Minute of the day (UTC) this node checks, spread over the window by the node name so the nodes do not reboot together
+  ansible.builtin.set_fact:
+    cluster_reboot_node_minute: >-
+      {{ (cluster_reboot_window_start.split(':')[0] | int * 60 + cluster_reboot_window_start.split(':')[1] | int
+          + ((inventory_hostname | hash('md5'))[:8] | int(base=16)) % ([cluster_reboot_window_minutes | int, 1] | max)) % 1440 }}
+
+- name: Nightly reboot on Debian (systemd timer)
+  when: ansible_facts['os_family'] == 'Debian'
+  block:
+    - name: Units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [cluster-reboot.service, cluster-reboot.timer]
+      register: cluster_reboot_units
+      when: cluster_reboot_automatic | bool
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: cluster_reboot_units is changed
+
+    - name: Timer is enabled and running
+      ansible.builtin.systemd:
+        name: cluster-reboot.timer
+        enabled: true
+        state: "{{ 'restarted' if cluster_reboot_units is changed else 'started' }}"
+      when: cluster_reboot_automatic | bool
+
+    - name: Timer is gone (automatic reboots are off)
+      when: not cluster_reboot_automatic | bool
+      block:
+        - name: Stop and disable the timer
+          ansible.builtin.systemd:
+            name: cluster-reboot.timer
+            enabled: false
+            state: stopped
+          failed_when: false
+
+        - name: Remove the units
+          ansible.builtin.file:
+            path: "/etc/systemd/system/{{ item }}"
+            state: absent
+          loop: [cluster-reboot.service, cluster-reboot.timer]
+          register: cluster_reboot_removed
+
+        - name: Reload systemd
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when: cluster_reboot_removed is changed
+
+# busybox crond reads /etc/crontabs/<user> and runs in the node's time zone (UTC unless configured otherwise)
+- name: Nightly reboot on Alpine (cron)
+  when: ansible_facts['os_family'] == 'Alpine'
+  block:
+    - name: crond is enabled and running
+      ansible.builtin.service:
+        name: crond
+        enabled: true
+        state: started
+      when: cluster_reboot_automatic | bool
+
+    - name: Cron job
+      ansible.builtin.lineinfile:
+        path: /etc/crontabs/root
+        create: true
+        owner: root
+        group: root
+        mode: "0600"
+        regexp: 'cluster-reboot'
+        line: "{{ cluster_reboot_node_minute | int % 60 }} {{ cluster_reboot_node_minute | int // 60 }} * * * /usr/local/sbin/cluster-reboot"
+        state: "{{ 'present' if cluster_reboot_automatic | bool else 'absent' }}"

@@ -58,8 +58,9 @@ interactive questions (`task authelia:user`, `task proxy:login`).
 
 ## What the nodes need
 
-- **Ubuntu 26.04 LTS or later**, or the **latest Alpine Linux** (3.24 tested). Nothing
-  older is supported: the controller's ssh client offers only `mlkem768x25519-sha256`, which needs the OpenSSH 10 of these releases.
+- **Debian 13 (trixie) or later**, or the **latest Alpine Linux** (3.24 tested). Nothing
+  older is supported: the controller's ssh client offers only `mlkem768x25519-sha256` (post-quantum key exchange, OpenSSH 10), and the TLS
+  of the platform needs X25519MLKEM768 (OpenSSL 3.5). Debian 13 ships both (OpenSSH 10.0, OpenSSL 3.5); Ubuntu is no longer supported.
 - Nodes reach each other by the address of their `cluster_interface`; no DNS records for node names are needed.
 - Root on the node for the bootstrap, and a way in when ssh is broken (the provider's console or rescue mode). After the bootstrap
   and deploy root cannot log in over ssh, and ssh is the only remote way in; the firewall leaves port 22 open to everyone.

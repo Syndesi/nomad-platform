@@ -23,7 +23,7 @@ nomad_docker_default_caps: [chown, dac_override, fowner, fsetid, kill, net_bind_
 # nomad agents register themselves in consul with this token (minted by tofu-consul)
 nomad_consul_token: "{{ (cluster_consul_out.service_tokens | default({}))['nomad-agent'] | default('') }}"
 
-# where the cni plugin binaries live (package: cni-plugins on alpine, containernetworking-plugins on ubuntu)
+# where the cni plugin binaries live (package: cni-plugins on alpine, containernetworking-plugins on debian)
 nomad_cni_path: "{{ {'Alpine': '/usr/libexec/cni', 'Debian': '/usr/lib/cni'}[ansible_facts['os_family']] }}"
 
 # Authelia runs on the nodes in cluster_authelia_hosts (client meta authelia = true, the host volume of 55-authelia.hcl)

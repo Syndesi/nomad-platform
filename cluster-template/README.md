@@ -25,7 +25,7 @@ You need `docker`, `git`, [`task`](https://taskfile.dev) and [`gum`](https://git
 | `.env` | `CLUSTER_NAME` and `COMPOSE_PROJECT_NAME` (same value, lower case). Binary cache: `ARTIFACTS_DIR` (default `~/.cache/nomad-platform/artifacts`, shared by all clusters). No `${HOME}` in this file |
 | `inventory/group_vars/all/cluster.yml` | `cluster_name`, `cluster_domain`, `cluster_acme_email`, `cluster_acme_ca`, `cluster_ssh_authorized_keys` (your own public ssh keys) |
 | `inventory/group_vars/all/authelia.yml` | users (name, mail, groups) and which group may open which domain; every rule must be `two_factor`, `deny` or an explicit `bypass` (public route) |
-| `inventory/20-static.yml` | the nodes: `ansible_host`, OS group (`alpine` / `ubuntu`), roles (`cluster_servers`, `cluster_clients`, `cluster_ingress`) |
+| `inventory/20-static.yml` | the nodes: `ansible_host`, OS group (`alpine` / `debian`), roles (`cluster_servers`, `cluster_clients`, `cluster_ingress`) |
 | `inventory/host_vars/<node>.yml` | per node: `cluster_interface`, `cluster_host_volumes`, ... |
 
 `cluster_acme_ca`: `internal` (the cluster CA signs the ingress certificate; browsers warn), `letsencrypt-staging` (first real
@@ -37,7 +37,7 @@ test: needs DNS and ports 80/443 reachable), `letsencrypt`. Use staging until ev
 all:
   children:
     alpine: {hosts: {}}
-    ubuntu:
+    debian:
       hosts:
         vps1: {ansible_host: 203.0.113.10}
     cluster_servers: {hosts: {vps1: {}}}
@@ -67,7 +67,7 @@ task authelia:user -- admin          # per user: asks for a password twice, stor
 
 ## 3. Prepare every node (once, as root)
 
-The nodes run **Ubuntu 26.04 LTS or later** or the **latest Alpine Linux**, and you need a console or rescue mode of the provider for the
+The nodes run **Debian 13 (trixie) or later** or the **latest Alpine Linux**, and you need a console or rescue mode of the provider for the
 day ssh is broken.
 
 **a) The ansible user.** `task ssh:bootstrap-cmd` prints the line to run. Copy `base/scripts/node-bootstrap.sh` to the node and run it
@@ -78,7 +78,7 @@ scp base/scripts/node-bootstrap.sh root@203.0.113.10:
 ssh root@203.0.113.10 "sh node-bootstrap.sh ansible 'ssh-ed25519 AAAA... ansible@my-cluster'"     # the line `task ssh:bootstrap-cmd` printed
 ```
 
-It installs sshd, python3 and sudo (Ubuntu) or doas (Alpine), creates the unprivileged `ansible` user (random password nobody knows,
+It installs sshd, python3 and sudo (Debian) or doas (Alpine), creates the unprivileged `ansible` user (random password nobody knows,
 key login only, passwordless escalation) and authorizes the automation key. Safe to run again. From the first deploy on, root and
 passwords are refused by sshd; the root password stays untouched (the console still works with it).
 Check: `ssh -i secrets/ssh/ansible_ed25519 ansible@203.0.113.10 sudo id` (use `doas id` on Alpine).
@@ -92,7 +92,7 @@ neither the router's DHCP nor DNS knows (the other machines of the LAN still rea
 real interface, and the node loses all traffic in that subnet. Several nodes need to reach each other's cluster addresses, so on
 several nodes use addresses of one shared subnet.
 
-Ubuntu (systemd-networkd; tested on 26.04; independent of netplan/cloud-init):
+Debian (systemd-networkd; not tested on a real Debian node yet, check it with a reboot; it only configures the links its files match, so it can run next to ifupdown or cloud-init's network config; `systemctl enable --now systemd-networkd` if it is not running):
 
 ```sh
 cat > /etc/systemd/network/10-cluster0.netdev <<'EOF'
@@ -149,7 +149,7 @@ Afterwards:
 
 | What | How |
 |---|---|
-| Package updates, new node certificates | `task maintenance` regularly (monthly, from CI). Nodes are **not** rebooted (`cluster_reboot_allowed: false`): it lists the nodes that want one, you reboot them. Certificates are renewed only by this and by `deploy:ansible`: do it at least once a year |
+| Package updates, new node certificates | `task maintenance` regularly (monthly, from CI). A node reboots **by itself at night** (02:00-04:00 UTC, `cluster_reboot_*`) when a newer kernel is installed; `task maintenance` lists the nodes that want a reboot. A node whose disk needs someone at boot gets `cluster_reboot_requires_unlock: true` in its host_vars and is only listed. Certificates are renewed only by this and by `deploy:ansible`: do it at least once a year |
 | Add or change a node | edit `inventory/`, bootstrap a new node (step 3), `task node -- <name>` |
 | Add a user | `authelia_users` in `authelia.yml`, `task authelia:user -- <name>`, `task deploy:ansible` |
 | Backup | `task backup`, then copy `backups/<dir>` and the age key off the machine. Restore: `task restore -- <dir>` ([reference](../docs/reference.md)) |

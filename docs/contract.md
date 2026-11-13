@@ -34,15 +34,15 @@ Inside the tools container the cluster repo is `/work`, the platform `/work/base
 
 | Group | Meaning |
 |---|---|
-| `alpine` / `ubuntu` | OS family of the node (selects the binary build, package manager, init system) |
+| `alpine` / `debian` | OS family of the node (selects the binary build, package manager, init system) |
 | `cluster_servers` | consul + nomad server (and, if also in `cluster_clients`, client) |
 | `cluster_clients` | nomad client: docker, cni, dns forwarder |
 | `cluster_ingress` | exactly one node: runs traefik (nomad client meta `traefik=true`), public 80/443; Authelia runs there by default |
 
 The platform does not create machines. How they come to be (incus VMs by tofu, bare metal, a VPS) is the cluster repo's
 business. It must only make them reachable over ssh and run `scripts/node-bootstrap.sh` on them once (by hand, or from
-cloud-init): that creates the unprivileged `cluster_ansible_user` (key login, `sudo` on ubuntu, `doas` on alpine). The nodes run
-Ubuntu 26.04 LTS or later or the latest Alpine (the controller's ssh client offers `mlkem768x25519-sha256` only) and, for a node without a private network, a dummy or
+cloud-init): that creates the unprivileged `cluster_ansible_user` (key login, `sudo` on debian, `doas` on alpine). The nodes run
+Debian 13 or later or the latest Alpine (the controller's ssh client offers `mlkem768x25519-sha256` only) and, for a node without a private network, a dummy or
 private interface that `cluster_interface` names (the platform does not create it, see the cluster guide).
 Ansible and the scripts log in with the key from `task ssh:init`; root cannot log in over ssh.
 A cluster whose nodes are not routable can add lines to the controller's ssh config with `cluster_ssh_config_extra`
@@ -65,7 +65,7 @@ are renewed once half of this is over), `cluster_nomad_http_port`, `cluster_cons
 `cluster_ansible_user`, `cluster_ssh_authorized_keys`, `cluster_interface` (per node: the cluster network's interface, default the default route's),
 `cluster_docker_volumes_enabled` (default false), `cluster_docker_daemon_extra`, `cluster_docker_nofile` (1048576), `cluster_gvisor_enabled` (default true), `cluster_gvisor_default_runtime` (`runsc-host`; `runsc`, `runc`), `cluster_gvisor_platform` (`systrap`), `cluster_log_retention_days` (7), `cluster_consul_task_kv_prefixes` (none),
 `cluster_traefik_wireguard` / `cluster_wireguard_image` (see the README), `cluster_ssh_key_file`, `cluster_ssh_kex`, `cluster_ssh_ciphers`,
-`cluster_ssh_host_key_algorithms`, `cluster_ssh_pubkey_algorithms`, `cluster_ssh_config_extra`, `cluster_reboot_allowed`,
+`cluster_ssh_host_key_algorithms`, `cluster_ssh_pubkey_algorithms`, `cluster_ssh_config_extra`, `cluster_reboot_enabled`, `cluster_reboot_window_start`, `cluster_reboot_window_minutes`, `cluster_reboot_requires_unlock` (per node), `cluster_reboot_allowed`,
 `authelia_internal_extra_rules` (rules of your own internal apps behind the VPN), `cluster_internal_apps` (`[{name, addr}]`: `https://<name>.<zone>` on the VPN entry point), `authelia_oidc_clients` / `authelia_internal_oidc_clients` (OpenID Connect clients of the public / internal authelia: `{id, name, secret_hash, redirect_uris, mesh_service, require_pkce?, token_auth_method?}`; secrets: `cluster_authelia_oidc_hmac_secret`, `cluster_authelia_oidc_jwks_key`, `task secrets:ensure`), `cluster_internal_zone` (default `<cluster_name>.internal`),
 `cluster_vpn_subnet` (a `x.y.z.0/24`, distinct per cluster), `cluster_vpn_*` (host, ports, MTU, client certificate lifetime, `cluster_vpn_project_first`), `cluster_projects` (`docs/projects.md`), `cluster_stepca_enabled` (default true) and
 `cluster_stepca_*`, `authelia_internal_totp_seeds`, and the role defaults (`nomad_*`, `consul_*`). Inventory sources are merged in order (`ansible.cfg`: base first, cluster

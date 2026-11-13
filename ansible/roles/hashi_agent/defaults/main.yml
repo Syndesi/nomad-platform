@@ -40,5 +40,5 @@ hashi_agent_openrc_all_caps: [chown, dac_override, dac_read_search, fowner, fset
 
 # Derived: how the build step names its output (<product>-<version>-<variant>-<arch>).
 hashi_agent_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_facts['architecture'], 'unsupported') }}"
-hashi_agent_variant: "{{ {'Alpine': 'alpine', 'Ubuntu': 'ubuntu'}.get(ansible_facts['distribution'], 'unsupported') }}"
+hashi_agent_variant: "{{ {'Alpine': 'alpine', 'Debian': 'debian'}.get(ansible_facts['distribution'], 'unsupported') }}"
 hashi_agent_artifact: "{{ hashi_agent_artifacts_dir }}/{{ hashi_agent_name }}-{{ hashi_agent_version }}-{{ hashi_agent_variant }}-{{ hashi_agent_arch }}"

@@ -23,7 +23,7 @@ sources:
     # a new file starts at the beginning, a known one where it stopped (checkpoints in the data directory)
     read_from: beginning
 [[- end ]]
-  # the system logs of the node (/var/log): alpine writes files per service (nomad, consul, docker), ubuntu has rsyslog's files (syslog holds what the services log to
+  # the system logs of the node (/var/log): alpine writes files per service (nomad, consul, docker), debian has rsyslog's files (syslog holds what the services log to
   # the journal, and the kernel messages: kern.log has the same ones again, so it is not read; auth.log is not in syslog); they stay on the node (rotated by cluster_logs, cluster_log_retention_days) and are shipped as well
   system:
     type: file

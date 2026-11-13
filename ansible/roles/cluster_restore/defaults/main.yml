@@ -6,5 +6,5 @@
 
 # the age identity that decrypts the backup (inside the tools container)
 cluster_restore_age_key: "{{ lookup('ansible.builtin.env', 'SOPS_AGE_KEY_FILE') | default('/age/keys.txt', true) }}"
-# tmpfs on the node (alpine and ubuntu: /run): the snapshot holds every secret of the cluster and never touches a disk there
+# tmpfs on the node (alpine and debian: /run): the snapshot holds every secret of the cluster and never touches a disk there
 cluster_restore_node_dir: /run/cluster-restore

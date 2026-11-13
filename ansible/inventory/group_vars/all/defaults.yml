@@ -79,7 +79,7 @@ cluster_run_dir: /dev/shm/cluster
 cluster_leaf_renew_before_days: "{{ (cluster_leaf_valid_days | int / 2) | int }}"
 
 # How ansible reaches the nodes: ssh as the unprivileged ansible user, privileges through sudo/doas (group_vars/alpine.yml,
-# ubuntu.yml; the plays that touch nodes say `become: true`)
+# debian.yml; the plays that touch nodes say `become: true`)
 ansible_connection: "{{ 'local' if inventory_hostname == 'localhost' else 'ssh' }}"
 ansible_user: "{{ cluster_ansible_user }}"
 ansible_ssh_common_args: "-F {{ cluster_ssh_config_file }}"
@@ -112,8 +112,21 @@ cluster_ssh_pubkey_algorithms: [ssh-ed25519]
 # More lines for the controller's ssh config, e.g. a ProxyCommand for nodes that are not routable
 cluster_ssh_config_extra: ""
 
-# maintenance: reboot the nodes when updates want it. Default false: nodes with disk encryption need a password at boot, so
-# restarts are the operator's job; the maintenance run lists the nodes that want one (true = reboot the whole cluster at once)
+# Reboots (role cluster_reboot): a node reboots by itself, at night, when a newer kernel than the running one is installed. There is no
+# drain: the node simply restarts, its workloads come back with it (expect a few minutes of downtime per node; nodes pick their minute
+# inside the window by their name, so a cluster does not go down all at once). false = never by itself; `task maintenance` lists the nodes
+# that want one.
+cluster_reboot_enabled: true
+# The window, in UTC (03:00-05:00 CET, 21:00-23:00 US Eastern with the default). Updates arrive every cluster_updates_interval_hours, from 00:00 UTC on.
+cluster_reboot_window_start: "02:00"
+cluster_reboot_window_minutes: 120
+# true: someone or something has to unlock this node's disk at boot (full disk encryption without an unattended unlock, e.g. a password
+# by hand). Such a node never reboots by itself (and `task maintenance` skips it); it is only listed as wanting a reboot. Set it per node
+# (host_vars / the inventory), not for the whole cluster. Unattended unlock (Clevis + Tang, ...) is `false`: the node comes back alone.
+cluster_reboot_requires_unlock: false
+
+# maintenance (task maintenance): also reboot the nodes that want it NOW instead of waiting for the night (true = the whole cluster at once,
+# nodes with cluster_reboot_requires_unlock excepted).
 cluster_reboot_allowed: false
 
 # --- network: where the cluster listens ---------------------------------------------------------
@@ -168,7 +181,7 @@ cluster_gvisor_version: "{{ lookup('ansible.builtin.env', 'GVISOR_VERSION') }}"
 cluster_gvisor_platform: systrap
 cluster_gvisor_dir: /usr/local/lib/gvisor
 cluster_gvisor_version_dir: "{{ cluster_gvisor_dir }}/{{ cluster_gvisor_version }}"
-cluster_gvisor_artifact: "/artifacts/runsc-{{ cluster_gvisor_version }}-{{ {'Alpine': 'alpine', 'Ubuntu': 'ubuntu'}.get(ansible_facts['distribution'], 'unsupported') }}-{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_facts['architecture'], 'unsupported') }}.tar"
+cluster_gvisor_artifact: "/artifacts/runsc-{{ cluster_gvisor_version }}-{{ {'Alpine': 'alpine', 'Debian': 'debian'}.get(ansible_facts['distribution'], 'unsupported') }}-{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_facts['architecture'], 'unsupported') }}.tar"
 # the entries of daemon.json (merged by cluster_dns)
 cluster_gvisor_docker_daemon: >-
   {{ {'runtimes': {'runsc': {'path': cluster_gvisor_version_dir ~ '/runsc', 'runtimeArgs': ['--platform=' ~ cluster_gvisor_platform]},
@@ -244,7 +257,7 @@ cluster_restore_dir: ""
 cluster_restore_force: false
 
 # --- logs ---------------------------------------------------------------------------------------
-# Agent logs (nomad, consul, docker) are kept this many days, one file per day (alpine: logrotate, ubuntu: journald).
+# Agent logs (nomad, consul, docker) are kept this many days, one file per day (alpine: logrotate, debian: journald).
 cluster_log_retention_days: 7
 
 # --- consul ---------------------------------------------------------------------------------------
@@ -334,7 +347,7 @@ authelia_internal_access_rules: >-
 cluster_projects: {}
 
 # ---- tetragon: eBPF runtime security on every node (docs/reference.md, "Runtime security") ---------------------------------------
-# A host service (the static release of the agent, the same files on Alpine and Ubuntu). It needs a kernel with BTF and cgroup v2; a node without
+# A host service (the static release of the agent, the same files on Alpine and Debian). It needs a kernel with BTF and cgroup v2; a node without
 # is skipped with a message. By default it only observes: process_exec / process_exit events with the container and image, as json lines in
 # cluster_tetragon_log_dir/tetragon.log (rotated by size and daily by the agent), metrics for prometheus on the node's cluster address.
 # Policies that watch or enforce more: cluster_tetragon_presets (shipped, see docs/reference.md) and the cluster repo's tetragon.d/*.yaml.

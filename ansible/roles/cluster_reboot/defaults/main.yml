@@ -1,0 +1,4 @@
+---
+# The decision (cluster_reboot_*) lives in inventory/group_vars/all/defaults.yml; this is the derived switch.
+# Automatic reboots need the switch on and a node that comes back without a person (no disk password at boot).
+cluster_reboot_automatic: "{{ cluster_reboot_enabled | bool and not cluster_reboot_requires_unlock | bool }}"

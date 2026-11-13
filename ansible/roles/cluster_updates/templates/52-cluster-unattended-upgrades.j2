@@ -1,12 +1,10 @@
 // {{ ansible_managed }}
-// Security updates only (the packaged 50unattended-upgrades also takes ${distro_codename} and -updates).
-#clear Unattended-Upgrade::Allowed-Origins;
-Unattended-Upgrade::Allowed-Origins {
-	"${distro_id}:${distro_codename}-security";
-	"${distro_id}ESMApps:${distro_codename}-apps-security";
-	"${distro_id}ESM:${distro_codename}-infra-security";
+// Security updates only (the packaged 50unattended-upgrades also takes the point-release and -updates origins).
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+	"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
 };
-// never reboot by itself, never remove packages on its own
+// never reboot by itself (the role cluster_reboot does that, in its window), never remove packages on its own
 Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
 Unattended-Upgrade::Remove-Unused-Dependencies "false";

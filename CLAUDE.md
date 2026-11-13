@@ -8,7 +8,7 @@ product, this file describes how to work on it without wasting time.
 - **This repo has no Taskfile, no inventory, no tools container.** It is the shared code (roles, jobs, scripts). Nothing runs from here.
   `task ...` here fails with `No Taskfile found`.
 - **Everything runs from the test cluster: `cd ../incusos-test-cluster`** (author's setup; two incus VMs `itc-alpine` = server+ingress+client+
-  monitoring, `itc-ubuntu` = client; domain `itc.test`; its README has the test-only credentials). Its `base/` is a **copy** of this working tree.
+  monitoring, `itc-debian` = client; domain `itc.test`; its README has the test-only credentials). Its `base/` is a **copy** of this working tree.
 - **Tools live in the cluster's tools container** (`itc-tools`): ansible, tofu, sops, yamllint, shellcheck, step. They are NOT on the host. "command not found:
   yamllint/tofu/ansible" means "use the container": `task lint`, `task shell`, `docker compose exec -T tools ...`, or `dev:x` (below). On the host
   you have `task`, `docker`, `incus`, `nomad` (only for `nomad fmt` / `job validate`), `jq`, `rsync`, `gum`.
@@ -41,7 +41,7 @@ tree** (a smoke on a stale `base/` tests old code), secrets present, ssh to ever
    *on the node* (smoke does not know your new feature). Add checks for new behaviour to `scripts/smoke.sh` (that is the product's smoke; the
    dev tooling stays in `dev/`). Say plainly what you did not run.
 
-Other useful tasks: `task cluster` (members, nodes, jobs, read-only), `task status`, `task backup`, `task node -- itc-ubuntu` (one node),
+Other useful tasks: `task cluster` (members, nodes, jobs, read-only), `task status`, `task backup`, `task node -- itc-debian` (one node),
 `task deploy:ansible -- --limit itc-alpine,localhost` (**localhost must stay in the limit**, the token and tofu plays run there),
 `task teardown` + `task deploy` = fresh install (about 7-20 min; worth it once per bigger change: it finds bugs an upgrade hides).
 
@@ -49,7 +49,7 @@ Other useful tasks: `task cluster` (members, nodes, jobs, read-only), `task stat
 
 ```sh
 task dev:x -- 'nomad job status; consul members'           # on the server, ansible user, ops tokens in the env (nomad, consul, curl work)
-task dev:x -- -n itc-ubuntu 'docker ps'                     # another node
+task dev:x -- -n itc-debian 'docker ps'                     # another node
 task dev:x -- -r 'nft list ruleset | head'                  # root (ansible become), no tokens
 ../incusos-test-cluster/base/dev/x.sh <<'EOF'              # a longer script: stdin is passed as is, no quoting layer touches it
 nomad job status -json authelia | jq '.LatestDeployment'
@@ -90,13 +90,13 @@ shows up in `/proc`, in Tetragon's events and so in Loki).
 | `--limit` run fails with connection refused / missing tokens | `localhost` missing from the limit | `--limit <node>,localhost` |
 | `task: No Taskfile found` | you are in `nomad-platform` | `cd ../incusos-test-cluster` |
 | a hand edit on a node broke the service (consul down) | `sed -i` recreates the file with the editing user's owner/mode | edit with `cp -p backup`, `cat > file`, or `sed -i` then `chown --reference`; always keep a backup and restore it after the experiment |
-| `sqlite3`/`jq`/`nslookup` "not found" on a node or in a container | not installed on that OS / busybox variant (alpine vs ubuntu differ) | check both nodes; smoke checks must work on both |
+| `sqlite3`/`jq`/`nslookup` "not found" on a node or in a container | not installed on that OS / busybox variant (alpine vs debian differ) | check both nodes; smoke checks must work on both |
 | `ansible ... -a '... {{.Names}} ...'` fails with templating errors | ansible parses `{{ }}` in `-a` strings | use `dev:x` (no ansible in the path) or `docker ... --format` via a script on stdin |
 | change to a test job file: `nomad job run` says unchanged | same spec | add something real, or `--restart` |
 
 ## Shells: zsh on the host, bash in the container, busybox sh on alpine
 
-The host shell is **zsh** (the Bash tool starts it), the tools container has **bash**, alpine nodes have **busybox ash** with **`doas`** (ubuntu: `sudo`,
+The host shell is **zsh** (the Bash tool starts it), the tools container has **bash**, alpine nodes have **busybox ash** with **`doas`** (debian: `sudo`,
 GNU tools). One command often crosses all three: that is where the quoting accidents came from.
 
 - zsh does **not word-split** `$var`: `cmd="incus exec x --"; $cmd ls` fails with `command not found: incus exec x --`. Use arrays (`cmd=(incus exec x --); $cmd[@]`), `eval`, or a
@@ -130,14 +130,17 @@ see into sandboxes. `/proc/net/*` is empty in host-net mode; the runtime default
 **Consul / TLS**: `tls_min_version = TLSv1_3` must NOT be on Consul's `grpc` listener (Envoy xDS breaks); the mesh `proxy-defaults` TLS entry needs **both**
 min and max `TLSv1_3`, or the curves are dropped silently and sidecars die with `unexpected EOF`. BoringSSL/Envoy reject chains whose leaf has IP SANs under a CA
 with IP name constraints (openssl and Go accept them): test with a real Envoy, not only openssl. `pq-only` TLS (X25519MLKEM768) needs OpenSSL 3.5 clients
-(Ubuntu 24.04's 3.0 cannot connect).
+(Debian 13 has OpenSSL 3.5 and OpenSSH 10.0, so it can; Ubuntu 24.04's 3.0 could not).
 
 **Authelia**: OIDC issuer derives from the Host header (no port); ID-token claims need a `claims_policies` entry; 4.39 `storage user totp import` is an
 upsert. **Do not change the `secrets/authelia/totp-*.txt` handling** (the user decided: operator risk).
 
 **Alpine**: `dhcpcd` can rewrite `/etc/resolv.conf` and run twice (smoke checks "one dns server"); OpenRC `supervise-daemon` has `no_new_privs`; a changed nft ruleset is not
-reloaded by the deploy when the file is unchanged (reload by hand when testing prototypes). Ubuntu 26.04: AppArmor active, systemd `Protect*` options on the Nomad unit hide
-its secrets tmpfs from dockerd (removed for Nomad only).
+reloaded by the deploy when the file is unchanged (reload by hand when testing prototypes). Debian 13: AppArmor active (docker.io 26.1.5 from the distribution), trixie has no `systemd-resolved`, `systemd-timesyncd` or rsyslog by default (the deploy installs them), the sshd role
+writes the main `/etc/ssh/sshd_config` (not a drop-in). The `Protect*` options on the Nomad unit hiding its secrets tmpfs from dockerd were found on Ubuntu 26.04 and are not re-checked on Debian.
+**Reboots**: `/usr/local/sbin/cluster-reboot --check` (role `cluster_reboot`) says whether a newer kernel is installed; running it without `--check` REBOOTS the node. Debian names kernel files
+`/boot/vmlinuz-<release>`, Alpine `/boot/vmlinuz-<flavor>` (no release in the name): the script only trusts names starting with a digit. `dev:x -r` goes through ansible: `{{ }}` (docker `--format`) is eaten, use `jq`.
+A replaced node leaves a stale member behind (`consul force-leave -prune <old>`, `nomad system gc`) and a stale `incus port-forward` on its ssh port (`task ssh:forward` stops those now).
 
 **Images**: tags only, no digests, no `latest` (see the memory note). Verify a tag exists on the registry before writing it down.
 

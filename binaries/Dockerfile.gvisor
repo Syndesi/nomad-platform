@@ -1,28 +1,28 @@
 # Builds runsc (gVisor's OCI runtime) from source for one OS variant.
 #   docker build -f Dockerfile.gvisor --target out --build-arg VERSION=20261102.0 --build-arg GO_COMMIT=<sha> \
-#                --build-arg VARIANT=alpine|ubuntu --output type=local,dest=<dir> .
+#                --build-arg VARIANT=alpine|debian --output type=local,dest=<dir> .
 #
 # gVisor's own build is Bazel, but its `go` branch is a synthetic branch with plain Go sources (and the prebuilt sighandler stub)
 # that builds with `go build`, CGO off. Each commit of that branch merges one commit of master; the release tag release-<VERSION> points
 # at a master commit, and GO_COMMIT is the `go` branch commit that merges exactly that one. verify-gvisor.sh checks both ends.
-# CGO off means a static binary: the alpine and ubuntu builds differ only in the toolchain image. Both are built anyway so every OS
+# CGO off means a static binary: the alpine and debian builds differ only in the toolchain image. Both are built anyway so every OS
 # variant has an artifact built the same way as nomad and consul.
 # runsc starts "sidecars" from a gvisor-bin/ directory next to it: three more Go programs and three tiny freestanding C programs
 # (flags from their BUILD files in the master repo, no libc involved). The result is one tar: runsc + gvisor-bin/*.
 # No defaults on purpose: binaries/build-runsc.sh passes everything from the cluster's .env.
 ARG VARIANT
 ARG ALPINE_VERSION
-ARG UBUNTU_VERSION
+ARG DEBIAN_VERSION
 ARG GO_VERSION
 
 FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS go-alpine
-FROM golang:${GO_VERSION}-trixie AS go-ubuntu
+FROM golang:${GO_VERSION}-trixie AS go-debian
 FROM go-${VARIANT} AS go
 
 FROM alpine:${ALPINE_VERSION} AS base-alpine
 RUN apk add --no-cache git bash tar build-base linux-headers
 
-FROM ubuntu:${UBUNTU_VERSION} AS base-ubuntu
+FROM debian:${DEBIAN_VERSION} AS base-debian
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git bash build-essential \
  && rm -rf /var/lib/apt/lists/*

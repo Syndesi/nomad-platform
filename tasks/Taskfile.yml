@@ -26,29 +26,29 @@ tasks:
   # ---- binaries (host side, needs docker) --------------------------------------------------
 
   build:
-    desc: Build nomad, consul and runsc (gVisor) from source for alpine and ubuntu into the shared artifacts cache (~/.cache/nomad-platform/artifacts or $ARTIFACTS_DIR; skips existing, FORCE=1 rebuilds)
+    desc: Build nomad, consul and runsc (gVisor) from source for alpine and debian into the shared artifacts cache (~/.cache/nomad-platform/artifacts or $ARTIFACTS_DIR; skips existing, FORCE=1 rebuilds)
     aliases: [build:binaries]
-    deps: [build:nomad:alpine, build:nomad:ubuntu, build:consul:alpine, build:consul:ubuntu, build:runsc:alpine, build:runsc:ubuntu]
+    deps: [build:nomad:alpine, build:nomad:debian, build:consul:alpine, build:consul:debian, build:runsc:alpine, build:runsc:debian]
 
   build:nomad:alpine:
     internal: true
     cmds: ["base/binaries/build.sh nomad alpine"]
-  build:nomad:ubuntu:
+  build:nomad:debian:
     internal: true
-    cmds: ["base/binaries/build.sh nomad ubuntu"]
+    cmds: ["base/binaries/build.sh nomad debian"]
   build:consul:alpine:
     internal: true
     cmds: ["base/binaries/build.sh consul alpine"]
-  build:consul:ubuntu:
+  build:consul:debian:
     internal: true
-    cmds: ["base/binaries/build.sh consul ubuntu"]
+    cmds: ["base/binaries/build.sh consul debian"]
 
   build:runsc:alpine:
     internal: true
     cmds: ["base/binaries/build-runsc.sh alpine"]
-  build:runsc:ubuntu:
+  build:runsc:debian:
     internal: true
-    cmds: ["base/binaries/build-runsc.sh ubuntu"]
+    cmds: ["base/binaries/build-runsc.sh debian"]
 
   artifacts:
     desc: List the built binaries

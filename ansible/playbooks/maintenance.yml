@@ -2,8 +2,8 @@
 # Maintenance, run when you want (monthly, yearly, ...):
 #   1. install ALL package updates on every node (in parallel)
 #   2. reboot the whole cluster at once if updates want it and cluster_reboot_allowed is true, then wait until consul and
-#      nomad answer again; false (the default: nodes with disk encryption need a password at boot) = reboots are yours,
-#      the nodes that want one are listed at the very end
+#      nomad answer again; false (the default) = the nodes reboot themselves in their nightly window (role cluster_reboot),
+#      and the nodes that want one are listed at the very end. Nodes with cluster_reboot_requires_unlock are never rebooted here.
 #   3. replace the leaf cert, node by node: a NEW key + CSR on the node, signed here with the CA, installed
 #   4. daemons re-read the files on SIGHUP (role cluster_tls does that, no restart needed);
 #      verify the cert they actually SERVE, and restart only a daemon that still serves the old one
@@ -49,7 +49,7 @@
   become: true
   gather_facts: true
   tasks:
-    - name: Upgrade packages (ubuntu)
+    - name: Upgrade packages (debian)
       ansible.builtin.apt:
         update_cache: true
         upgrade: dist
@@ -62,40 +62,32 @@
         upgrade: true
       when: ansible_facts['os_family'] == 'Alpine'
 
-    - name: Does the OS want a reboot? (ubuntu, flag file)
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: maintenance_reboot_flag
-      when: ansible_facts['os_family'] == 'Debian'
-
-    - name: Does the OS want a reboot? (alpine, the newest installed kernel is not the running one)
-      ansible.builtin.shell: |
-        newest=$(ls /lib/modules | sort -V | tail -1)
-        [ "$newest" = "$(uname -r)" ] || echo reboot
-      register: maintenance_reboot_kernel
+    # the same check the nightly job uses (role cluster_reboot): is a newer kernel installed than the running one?
+    - name: Does the OS want a reboot? (a newer kernel is installed than the running one)
+      ansible.builtin.command: /usr/local/sbin/cluster-reboot --check
+      register: maintenance_reboot_check
       changed_when: false
-      when: ansible_facts['os_family'] == 'Alpine'
+      failed_when: maintenance_reboot_check.rc not in [0, 10]
 
     - name: Remember
       ansible.builtin.set_fact:
-        maintenance_needs_reboot: >-
-          {{ ((maintenance_reboot_flag.stat.exists | default(false)) or ('reboot' in (maintenance_reboot_kernel.stdout | default('')))) | bool }}
+        maintenance_needs_reboot: "{{ maintenance_reboot_check.rc == 10 }}"
 
 - name: Reboot the cluster when updates want it
   hosts: cluster_servers:cluster_clients
   become: true
   gather_facts: false
   tasks:
-    - name: Reboot needed but not allowed (cluster_reboot_allowed=false)
+    - name: Reboot needed but not allowed here (cluster_reboot_allowed=false, or the node needs someone to unlock its disk)
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }} needs a reboot"
-      when: maintenance_needs_reboot | bool and not cluster_reboot_allowed | bool
+        msg: "{{ inventory_hostname }} needs a reboot{{ ' (cluster_reboot_requires_unlock: do it by hand)' if cluster_reboot_requires_unlock | bool else ' (the nightly job does it)' if cluster_reboot_enabled | bool else '' }}"
+      when: maintenance_needs_reboot | bool and (not cluster_reboot_allowed | bool or cluster_reboot_requires_unlock | bool)
 
     - name: Reboot (the whole cluster at once; Alpine's busybox shutdown takes no message)
       ansible.builtin.reboot:
         reboot_command: reboot
         reboot_timeout: 600
-      when: maintenance_needs_reboot | bool and cluster_reboot_allowed | bool
+      when: maintenance_needs_reboot | bool and cluster_reboot_allowed | bool and not cluster_reboot_requires_unlock | bool
       register: maintenance_rebooted
 
     - name: Nomad answers again
@@ -193,13 +185,17 @@
   connection: local
   gather_facts: false
   tasks:
-    - name: Nodes that want a reboot (updates installed, kernel or libraries not yet in use)
+    - name: Nodes that want a reboot and will not get one from this run (updates installed, kernel not yet in use)
       ansible.builtin.debug:
-        msg: "reboot needed on: {{ pending | join(', ') if pending else 'no node' }}"
+        msg: >-
+          reboot needed on: {{ pending | join(', ') if pending else 'no node' }}
+          {{ '(by the nightly job, except: ' ~ (unlock | join(', ')) ~ ', which need someone to unlock the disk at boot: reboot them by hand)' if unlock else '' }}
       vars:
-        pending: >-
+        wanting: >-
           {{ (groups['cluster_servers'] + groups['cluster_clients']) | unique
              | select('in', hostvars.keys()) | map('extract', hostvars)
              | selectattr('maintenance_needs_reboot', 'defined')
-             | selectattr('maintenance_needs_reboot', 'true') | map(attribute='inventory_hostname') | list }}
-      when: not cluster_reboot_allowed | bool
+             | selectattr('maintenance_needs_reboot', 'true') | list }}
+        unlock: "{{ wanting | selectattr('cluster_reboot_requires_unlock', 'true') | map(attribute='inventory_hostname') | list }}"
+        pending: "{{ wanting | map(attribute='inventory_hostname') | list if not cluster_reboot_allowed | bool else unlock }}"
+      when: pending | length > 0

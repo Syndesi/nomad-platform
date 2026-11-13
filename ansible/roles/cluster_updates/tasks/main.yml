@@ -1,7 +1,7 @@
 ---
-# Security updates without reboots. Ubuntu: unattended-upgrades, run by the apt timers every cluster_updates_interval_hours.
+# Security updates without reboots (the reboot, when a kernel wants one, is the role cluster_reboot). Debian: unattended-upgrades, run by the apt timers every cluster_updates_interval_hours.
 # Alpine: a cron job (busybox crond) with `apk upgrade`. See defaults.
-- name: Automatic updates on Ubuntu
+- name: Automatic updates on Debian
   when: cluster_updates_enabled | bool and ansible_facts['os_family'] == 'Debian'
   block:
     - name: unattended-upgrades is installed
@@ -18,7 +18,7 @@
         group: root
         mode: "0644"
 
-    - name: Security origins only, no reboot
+    - name: Security origins only (debian-security), no reboot
       ansible.builtin.template:
         src: 52-cluster-unattended-upgrades.j2
         dest: /etc/apt/apt.conf.d/52cluster-unattended-upgrades
@@ -93,7 +93,7 @@
         state: absent
       when: ansible_facts['os_family'] == 'Alpine'
 
-    - name: Ubuntu - periodic upgrades off (the package's own 20auto-upgrades would turn them on)
+    - name: Debian - periodic upgrades off (the package's own 20auto-upgrades would turn them on)
       ansible.builtin.copy:
         content: |
           // {{ ansible_managed }}

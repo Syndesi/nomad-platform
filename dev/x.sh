@@ -3,7 +3,7 @@
 #   dev/x.sh [-n <node>] [-r] '<command>'        e.g.  dev/x.sh 'nomad job status; consul members'
 #   dev/x.sh [-n <node>] [-r] <<'EOF' ... EOF     a longer script on stdin: nothing in it is touched by the local shell, ansible or docker
 # Default: on the first server, as the ansible user, with the ops tokens of nomad and consul in the environment (nomad, consul, curl to the
-# local APIs work as they are). -r: as root (ansible become; NO tokens). -n: another node (inventory name, e.g. itc-ubuntu).
+# local APIs work as they are). -r: as root (ansible become; NO tokens). -n: another node (inventory name, e.g. itc-debian).
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 dev_cluster_repo

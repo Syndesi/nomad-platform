@@ -133,6 +133,16 @@ for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; 
   fi
 done
 
+# reboots: the check script is on every node and works; the nightly job exists where the node may reboot by itself (cluster_reboot_enabled, and the
+# node is not marked cluster_reboot_requires_unlock). The kernel itself is not rebooted here.
+for n in $( { inventory_group cluster_servers; inventory_group cluster_clients; } | sort -u); do
+  rc=$(cluster_exec "$n" sh -c '/usr/local/sbin/cluster-reboot --check >/dev/null 2>&1; echo $?' 2>&1 | tail -1)
+  if [ "$rc" = 0 ] || [ "$rc" = 10 ]; then printf 'ok    reboot check on %s works (%s)\n' "$n" "$([ "$rc" = 10 ] && echo 'a reboot is wanted' || echo 'running the newest kernel')"; else printf 'FAIL  reboot check on %s (exit: %s)\n' "$n" "$rc"; fail=1; fi
+  want=$(ansible-inventory --host "$n" 2>/dev/null | jq -r 'if (.cluster_reboot_requires_unlock // false) == true then "no" else "default" end')
+  if [ "$want" = default ]; then want=$([ "$(cvar cluster_reboot_enabled)" = True ] || [ "$(cvar cluster_reboot_enabled)" = true ] && echo yes || echo no); fi
+  root_check "nightly reboot job on $n: $want" "$n" "if command -v systemctl >/dev/null 2>&1; then systemctl is-enabled cluster-reboot.timer 2>/dev/null | grep -qx enabled && echo yes || echo no; else grep -q cluster-reboot /etc/crontabs/root 2>/dev/null && echo yes || echo no; fi" "$want"
+done
+
 # containers: no internet and no public dns by default (*.consul and the node's names work); the network egress (cni/egress) has both.
 # One container of each kind on every client node.
 mt=$(consul_ops_token)

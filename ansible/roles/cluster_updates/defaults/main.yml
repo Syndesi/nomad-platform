@@ -1,8 +1,8 @@
 ---
-# Automatic package updates between the (manual) maintenance runs. Never reboots: a kernel or libc update waits until you reboot
-# (the nodes with disk encryption need a password at boot); `task maintenance` lists the nodes that want one.
+# Automatic package updates between the (manual) maintenance runs. This role never reboots: a kernel update is activated by the role
+# cluster_reboot (nightly window, unless the node needs someone to unlock its disk at boot), see cluster_reboot_*.
 cluster_updates_enabled: true
 # How often a node looks for and installs updates.
 cluster_updates_interval_hours: 12
-# Ubuntu: security pockets only (the distribution's own security archive, ESM). Alpine has no separate security channel, so there the cron
+# Debian: the security archive only (debian-security, no point-release updates). Alpine has no separate security channel, so there the cron
 # job is a plain `apk upgrade` (a point release of a package at most; the nomad and consul binaries are not packages).

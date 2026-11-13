@@ -1,5 +1,5 @@
 ---
 cluster_ssh_host_key_file: /etc/ssh/ssh_host_ed25519_key
 cluster_ssh_loaded_file: /etc/ssh/.cluster-sshd-config-loaded
-# where the sshd role puts its settings: a drop-in on ubuntu, the main file on alpine (no Include there)
-cluster_ssh_config_path: "{{ '/etc/ssh/sshd_config' if ansible_facts['os_family'] == 'Alpine' else '/etc/ssh/sshd_config.d/00-ansible_system_role.conf' }}"
+# where the sshd role puts its settings: the main file on alpine and on debian 13 (the role's Debian_13 vars; it keeps the Include line, and sshd_config.d stays empty)
+cluster_ssh_config_path: /etc/ssh/sshd_config

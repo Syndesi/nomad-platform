@@ -18,7 +18,7 @@
         enabled: true
         state: started
 
-- name: Ubuntu - journald keeps one file per day for the retention
+- name: Debian - journald keeps one file per day for the retention
   when: ansible_facts['os_family'] == 'Debian'
   block:
     - name: journald drop-in directory

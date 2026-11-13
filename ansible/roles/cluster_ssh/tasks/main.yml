@@ -39,7 +39,7 @@
       LoginGraceTime: 20
 
 # The role reloads sshd through handlers, which (a) do not run when a play fails later and (b) are skipped on systems that
-# start sshd through a socket unit (ubuntu 26.04). Either way a new sshd_config could sit on disk, unloaded, and the old,
+# start sshd through a socket unit. Either way a new sshd_config could sit on disk, unloaded, and the old,
 # looser settings would stay active. So the node remembers the checksum of the config its sshd was last reloaded with.
 - name: Checksum of the sshd config the role wrote
   ansible.builtin.stat:

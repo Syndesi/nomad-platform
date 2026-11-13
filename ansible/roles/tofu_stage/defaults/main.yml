@@ -34,7 +34,7 @@ tofu_stage_nomad_port: 14646
 # How the tunnel reaches the api on the first server: the cluster's remote shell ($CLUSTER_EXEC from the
 # cluster .env, %HOST% = the node; same contract as the scripts) plus nc on the node. Default is ssh with the
 # controller's client config (cluster_ssh_config_file).
-# (nc: busybox on alpine, netcat-openbsd on ubuntu - installed with the base packages.)
+# (nc: busybox on alpine, netcat-openbsd on debian - installed with the base packages.)
 # Every connection of tofu to the apis is a command on the node. With plain ssh that is a new login each (the nodes rate limit new ssh connections per
 # source address: a state with many objects hits it, the symptom is EOF from the apis); the ssh default therefore shares one connection (ControlMaster, a few
 # seconds after the last use it is closed) and tofu works on a few objects at a time (the channels of one connection are limited, sshd MaxSessions).
